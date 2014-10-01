@@ -1,0 +1,15 @@
+[package]
+
+name = "scan"
+version = "0.0.1"
+authors = ["Daniel Keep <daniel.keep@gmail.com>"]
+
+[lib]
+
+name = "scan"
+type = ["dylib"]
+plugin = true
+
+[dependencies.scan_util]
+
+path = "../scan-util"
