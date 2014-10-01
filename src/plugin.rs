@@ -140,7 +140,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 
 	debug!("make_scan_expr - building block expr");
 	/*let expr = quote_expr!(cx, {
-		use rt::Scanner;
+		use scan_util::Scanner;
 		$mod_setup_stmt
 		$setup_stmts
 		$match_expr
@@ -148,15 +148,16 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 	let expr = cx.expr_block(
 		cx.block_all(DUMMY_SP,
 			/*view_items:*/vec![
-				/*cx.view_use_simple(DUMMY_SP,
+				// This kinda sucks, but I can't find a way around this.  This requires the user to add an explicit `extern crate scan_util;` to their root module.
+				cx.view_use_simple(DUMMY_SP,
 					ast::Inherited,
-					cx.path(DUMMY_SP,
+					cx.path_global(DUMMY_SP,
 						vec![
-							cx.ident_of("rt"),
+							cx.ident_of("scan_util"),
 							cx.ident_of("Scanner"),
 						]
 					)
-				),*/
+				),
 			],
 			/*stmts:*/{
 				let mut stmts = vec![mod_setup_stmt];
