@@ -61,7 +61,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 			extern crate scan_util;
 			pub use std::result::{Result, Err, Ok};
 			pub use self::scan_util::{
-				Cursor,
+				Cursor, ScanCursor,
 				tokenizer,
 				whitespace,
 				ScanError, NothingMatched, OtherScanError, ScanIoError,
@@ -141,6 +141,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 	debug!("make_scan_expr - building block expr");
 	/*let expr = quote_expr!(cx, {
 		use scan_util::Scanner;
+		use scan_util::ScanCursor;
 		$mod_setup_stmt
 		$setup_stmts
 		$match_expr
@@ -155,6 +156,15 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 						vec![
 							cx.ident_of("scan_util"),
 							cx.ident_of("Scanner"),
+						]
+					)
+				),
+				cx.view_use_simple(DUMMY_SP,
+					ast::Inherited,
+					cx.path_global(DUMMY_SP,
+						vec![
+							cx.ident_of("scan_util"),
+							cx.ident_of("ScanCursor"),
 						]
 					)
 				),
