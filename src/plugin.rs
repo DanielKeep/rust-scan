@@ -488,8 +488,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 				match rt::Scanner::scan(&cur.pop_ws()) {
 					Err(err) => Err(err),
 					Ok((val, cur)) => {
-						let val: $ty = val;
-						let $ident = val.scanned_value();
+						let $ident: $ty = val;
 
 						$and_then
 					}
@@ -507,7 +506,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 							cx.block(DUMMY_SP,
 								vec![
 									/*quote_stmt!(cx,
-										let val: $ty = val;
+										let $ident: $ty = val;
 									),*/
 									match ty {
 										None => cx.stmt_let(ident.span,
@@ -522,14 +521,6 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 											quote_expr!(cx, val)
 										)
 									},
-									/*quote_stmt!(cx,
-										let $ident = val.scanned_value();
-									),*/
-									cx.stmt_let(ident.span,
-										/*mutbl:*/false,
-										ident.node,
-										quote_expr!(cx, val.scanned_value())
-									),
 								],
 								Some(and_then)
 							)
