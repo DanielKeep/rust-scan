@@ -103,7 +103,11 @@ fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArm {
 	}
 
 	// This *might* be a fallback pattern.
-	if p.token == token::DOTDOT {
+	if p.token == token::UNDERSCORE {
+		p.bump();
+		p.expect(&token::FAT_ARROW);
+		return FallbackArm(None)
+	} else if p.token == token::DOTDOT {
 		p.bump();
 		let ident = parse_fallback_ident(cx, p);
 		p.expect(&token::FAT_ARROW);

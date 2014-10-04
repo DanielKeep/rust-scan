@@ -5,6 +5,7 @@ use syntax::codemap;
 use syntax::codemap::DUMMY_SP;
 use syntax::ext::build::AstBuilder;
 use syntax::ext::base::{ExtCtxt, MacExpr, MacResult};
+use syntax::parse::parser::Parser;
 use syntax::parse::token;
 use syntax::ptr::P;
 
@@ -13,6 +14,28 @@ use parse::{ScanArm, FallbackArm, PatternArm};
 use parse::PatAst;
 
 use scan_util::{Tokenizer, Whitespace};
+
+pub fn expand_scan(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]) -> Box<MacResult+'static> {
+	debug!("expand_scan(cx, sp, tts)");
+	let mut p = cx.new_parser_from_tts(tts);
+
+	let setup_stmts = vec![];
+
+	let input_expr = p.parse_expr();
+	p.expect(&token::COMMA);
+
+	let input_expr = quote_expr!(cx, {
+		use std::str::Str;
+
+		rt::Ok(($input_expr).as_slice())
+	});
+
+	let (arms, fallback) = parse_scan_body(cx, &mut p, sp);
+
+	debug!("expand_scan - making scan expression");
+	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback);
+	MacExpr::new(scan_expr)
+}
 
 pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]) -> Box<MacResult+'static> {
 	debug!("expand_scanln(cx, sp, tts)");
@@ -28,19 +51,28 @@ pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]
 
 	let input_expr = quote_expr!(cx, line_str);
 
+	let (arms, fallback) = parse_scan_body(cx, &mut p, sp);
+
+	debug!("expand_scanln - making scan expression...");
+	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback);
+	debug!("expand_scanln - scan_expr: {}", scan_expr);
+	MacExpr::new(scan_expr)
+}
+
+fn parse_scan_body(cx: &mut ExtCtxt, p: &mut Parser, sp: codemap::Span) -> (Vec<(ScanArm, P<ast::Expr>)>, Option<(ScanArm, P<ast::Expr>)>) {
 	let mut arms = vec![];
 	let mut fallback = None;
 
 	while p.token != token::EOF && fallback.is_none() {
-		debug!("expand_scanln - parsing scan arm");
-		match parse_scan_arm(cx, &mut p) {
+		debug!("parse_scan_body - parsing scan arm");
+		match parse_scan_arm(cx, p) {
 			arm @ (FallbackArm(_), _) => fallback = Some(arm),
 			arm @ (PatternArm(_, _), _) => arms.push(arm),
 		}
 	}
 
 	if fallback.is_some() && p.token != token::EOF {
-		debug!("expand_scanln - got something after fallback");
+		debug!("parse_scan_body - got something after fallback");
 		let sp = p.span;
 		let tok_str = p.this_token_to_string();
 		p.span_note(sp, format!("there shouldn't be anything after the fallback arm, found `{}`", tok_str).as_slice());
@@ -51,10 +83,7 @@ pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]
 		p.span_fatal(sp, "expected at least one scan arm");
 	}
 
-	debug!("expand_scanln - making scan expression...");
-	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback);
-	debug!("expand_scanln - scan_expr: {}", scan_expr);
-	MacExpr::new(scan_expr)
+	(arms, fallback)
 }
 
 fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: P<ast::Expr>, arms: Vec<(ScanArm, P<ast::Expr>)>, fallback_arm: Option<(ScanArm, P<ast::Expr>)>) -> P<ast::Expr> {
@@ -192,6 +221,15 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 	debug!("gen_arm_stmt(cx, {}, {})", arm, is_first);
 	let (arm_pat, arm_expr) = arm;
 
+	// We need to wrap arm_expr in a block and a partially constrained Ok.  If we don't wrap it in a block, `break` won't work---the compiler will complain about an unconstrained type.
+	/*let arm_expr = quote_expr!(cx, rt::Ok::<_, rt::ScanError>({ $arm_expr }));*/
+	let arm_expr = cx.expr_call(DUMMY_SP,
+		quote_expr!(cx, rt::Ok::<_, rt::ScanError>),
+		vec![
+			cx.expr_block(cx.block_expr(arm_expr)),
+		]
+	);
+
 	let arm_expr = match arm_pat {
 		PatternArm(pattern, tail) => {
 			let and_then = match tail {
@@ -204,9 +242,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 									cur.consumed()
 								)
 							),
-							None => Ok({
-								$arm_expr
-							})
+							None => $arm_expr
 						}
 					})*/
 					cx.expr_match(DUMMY_SP,
@@ -220,13 +256,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 							),
 							cx.arm(DUMMY_SP,
 								vec![quote_pat!(cx, None)],
-								cx.expr_call(DUMMY_SP,
-									quote_expr!(cx, rt::Ok),
-									vec![
-										// NOTE: If arm_expr is *not* wrapped in a block, then `break` won't work---the compiler will complain about an unconstrained type.
-										cx.expr_block(cx.block_expr(arm_expr)),
-									]
-								)
+								arm_expr
 							)
 						]
 					)
@@ -234,9 +264,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 				Some(ident) => {
 					/*quote_expr!(cx, {
 						let $ident = cur.tail_str();
-						rt::Ok({
-							$arm_expr
-						})
+						$arm_expr
 					})*/
 					cx.expr_block(
 						cx.block(DUMMY_SP,
@@ -246,13 +274,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 									quote_expr!(cx, cur.tail_str())
 								),
 							],
-							Some(cx.expr_call(DUMMY_SP,
-								quote_expr!(cx, rt::Ok::<_, rt::ScanError>),
-								vec![
-									// NOTE: If arm_expr is *not* wrapped in a block, then `break` won't work---the compiler will complain about an unconstrained type.
-									cx.expr_block(cx.block_expr(arm_expr)),
-								]
-							))
+							Some(arm_expr)
 						)
 					)
 				}
@@ -260,32 +282,19 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 			gen_ast_scan_expr(cx, pattern, and_then)
 		},
 		FallbackArm(None) => {
-			/*quote_expr!(cx, Ok($arm_expr))*/
-			cx.expr_call(DUMMY_SP,
-				quote_expr!(cx, rt::Ok),
-				vec![
-					// NOTE: If arm_expr is *not* wrapped in a block, then `break` won't work---the compiler will complain about an unconstrained type.
-					cx.expr_block(cx.block_expr(arm_expr)),
-				]
-			)
+			arm_expr
 		},
 		FallbackArm(Some(ident)) => {
 			/*quote_expr!(cx, {
 				let $ident = cur.tail_str();
-				rt::Ok($arm_expr)
+				$arm_expr
 			})*/
 			cx.expr_block(
 				cx.block(DUMMY_SP,
 					vec![
 						quote_stmt!(cx, let $ident = cur.tail_str();),
 					],
-					Some(cx.expr_call(DUMMY_SP,
-						quote_expr!(cx, rt::Ok::<_, rt::ScanError>),
-						vec![
-							// NOTE: If arm_expr is *not* wrapped in a block, then `break` won't work---the compiler will complain about an unconstrained type.
-							cx.expr_block(cx.block_expr(arm_expr)),
-						]
-					))
+					Some(arm_expr)
 				)
 			)
 		},
@@ -766,8 +775,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 					quote_stmt!(cx, let mut err = rt::None::<rt::ScanError>;),
 					quote_stmt!(cx, let mut repeats = 0u;),
 					quote_stmt!(cx, let mut trailing_sep = false;),
-				] + captures.iter().map(|(&ident, &(sp, ref ty))| {
-					//let ty = ty.as_ref().map(|ty| ty.clone()).unwrap_or(cx.ty_infer(sp));
+				] + captures.iter().map(|(&ident, &(sp, _))| {
 					let ty = cx.ty_infer(sp);
 					cx.stmt_let_typed(
 						sp,
