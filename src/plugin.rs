@@ -1,3 +1,5 @@
+use std::collections::TreeMap;
+
 use syntax::ast;
 use syntax::codemap;
 use syntax::codemap::DUMMY_SP;
@@ -13,6 +15,7 @@ use parse::PatAst;
 use scan_util::{Tokenizer, Whitespace};
 
 pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]) -> Box<MacResult+'static> {
+	debug!("expand_scanln(cx, sp, tts)");
 	let mut p = cx.new_parser_from_tts(tts);
 
 	let setup_stmts = vec![
@@ -29,6 +32,7 @@ pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]
 	let mut fallback = None;
 
 	while p.token != token::EOF && fallback.is_none() {
+		debug!("expand_scanln - parsing scan arm");
 		match parse_scan_arm(cx, &mut p) {
 			arm @ (FallbackArm(_), _) => fallback = Some(arm),
 			arm @ (PatternArm(_, _), _) => arms.push(arm),
@@ -36,6 +40,7 @@ pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]
 	}
 
 	if fallback.is_some() && p.token != token::EOF {
+		debug!("expand_scanln - got something after fallback");
 		let sp = p.span;
 		let tok_str = p.this_token_to_string();
 		p.span_note(sp, format!("there shouldn't be anything after the fallback arm, found `{}`", tok_str).as_slice());
@@ -59,7 +64,9 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 	let mod_setup_stmt = quote_stmt!(cx,
 		mod rt {
 			extern crate scan_util;
+			pub use std::option::{None, Some};
 			pub use std::result::{Result, Err, Ok};
+			pub use std::vec::Vec;
 			pub use self::scan_util::{
 				Cursor, ScanCursor,
 				tokenizer,
@@ -206,14 +213,9 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 						quote_expr!(cx, cur.pop_token()),
 						vec![
 							cx.arm(DUMMY_SP,
-								vec![quote_pat!(cx, Some((tok, cur)))],
+								vec![quote_pat!(cx, Some((_, cur)))],
 								quote_expr!(cx,
-									rt::Err(
-										rt::OtherScanError(
-											format!("expected end of input, got `{}`", tok),
-											cur.consumed()
-										)
-									)
+									rt::Err(cur.expected_eof())
 								)
 							),
 							cx.arm(DUMMY_SP,
@@ -221,7 +223,8 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 								cx.expr_call(DUMMY_SP,
 									quote_expr!(cx, rt::Ok),
 									vec![
-										arm_expr,
+										// NOTE: If arm_expr is *not* wrapped in a block, then `break` won't work---the compiler will complain about an unconstrained type.
+										cx.expr_block(cx.block_expr(arm_expr)),
 									]
 								)
 							)
@@ -246,7 +249,8 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 							Some(cx.expr_call(DUMMY_SP,
 								quote_expr!(cx, rt::Ok::<_, rt::ScanError>),
 								vec![
-									arm_expr,
+									// NOTE: If arm_expr is *not* wrapped in a block, then `break` won't work---the compiler will complain about an unconstrained type.
+									cx.expr_block(cx.block_expr(arm_expr)),
 								]
 							))
 						)
@@ -259,7 +263,10 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 			/*quote_expr!(cx, Ok($arm_expr))*/
 			cx.expr_call(DUMMY_SP,
 				quote_expr!(cx, rt::Ok),
-				vec![arm_expr]
+				vec![
+					// NOTE: If arm_expr is *not* wrapped in a block, then `break` won't work---the compiler will complain about an unconstrained type.
+					cx.expr_block(cx.block_expr(arm_expr)),
+				]
 			)
 		},
 		FallbackArm(Some(ident)) => {
@@ -274,7 +281,10 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 					],
 					Some(cx.expr_call(DUMMY_SP,
 						quote_expr!(cx, rt::Ok::<_, rt::ScanError>),
-						vec![arm_expr]
+						vec![
+							// NOTE: If arm_expr is *not* wrapped in a block, then `break` won't work---the compiler will complain about an unconstrained type.
+							cx.expr_block(cx.block_expr(arm_expr)),
+						]
 					))
 				)
 			)
@@ -373,11 +383,113 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 }
 
 fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> P<ast::Expr> {
-	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstRepetition};
+	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstRepetition, RepeatRange};
 	debug!("gen_ast_scan_expr(cx, {}, {})", node, and_then);
+
+	let captures = enumerate_captures(&node);
+
 	match node {
-		AstAlternates(_) => {
-			fail!("NYI - alternates expr gen")
+		AstAlternates(nodes) => {
+			assert!(nodes.len() > 0);
+
+			// Construct the expression for each alternative.
+			let alt_exprs: Vec<_> = nodes.into_iter().map(|node| {
+				let alt_and_then = {
+					// Any capture which is in this branch gets returned as `Some(v)`; any capture *not* in this branch gets returned as `None`.
+					let alt_captures = enumerate_captures(&node);
+
+					let alt_results = captures.keys().map(|&ident| {
+						if alt_captures.contains_key(&ident) {
+							/*quote_expr!(cx, Some($ident))*/
+							cx.expr_call(DUMMY_SP,
+								quote_expr!(cx, rt::Some),
+								vec![
+									cx.expr_ident(DUMMY_SP,
+										ident
+									),
+								]
+							)
+						} else {
+							quote_expr!(cx, None)
+						}
+					});
+
+					// Every result starts with the cursor.
+					let cur_iter = Some(quote_expr!(cx, cur)).into_iter();
+
+					// Turn it into a tuple expr, wrap in an Ok.
+					cx.expr_ok(DUMMY_SP,
+						cx.expr_tuple(DUMMY_SP, cur_iter.chain(alt_results).collect())
+					)
+				};
+
+				// Now generate the match expr.
+				gen_ast_scan_expr(cx, node, alt_and_then)
+			}).collect();
+
+			// We now need to turn the vector of `Expr`s into a chain of `or_else` calls.
+			let alt_branches = {
+				/*quote_expr!(cx, {
+					$alt_exprs[0]
+						$( .or_else(|| $alt_exprs[1..]) )
+				})*/
+				let mut alt_exprs = alt_exprs.into_iter();
+				let first = alt_exprs.next().unwrap();
+				alt_exprs.fold(first, |lhs, rhs| {
+					// quote_expr!(cx, $lhs.or_else(|| $rhs))
+					cx.expr_method_call(DUMMY_SP,
+						lhs,
+						cx.ident_of("or_else"),
+						vec![
+							// TODO: combine errors properly.
+							// quote_expr!(cx, |_| $rhs)
+							cx.lambda_expr_1(DUMMY_SP, rhs, cx.ident_of("_")),
+						]
+					)
+				})
+			};
+
+			// Finally, we need the capture pattern.
+			let capture_pattern = cx.pat_tuple(DUMMY_SP,
+				{
+					let pats = captures.keys().map(|&ident| {
+						cx.pat_ident(DUMMY_SP, ident)
+					});
+					Some(quote_pat!(cx, cur)).into_iter()
+						.chain(pats)
+						.collect()
+				}
+			);
+
+			/*quote_expr!(cx, {
+				match $alt_branches {
+					Err(err) => Err(err),
+					Ok($capture_pattern) => $and_then
+				}
+			})*/
+			cx.expr_match(DUMMY_SP,
+				alt_branches,
+				vec![
+					cx.arm(DUMMY_SP,
+						vec![quote_pat!(cx, rt::Err(err))],
+						quote_expr!(cx, rt::Err(err))
+					),
+					cx.arm(DUMMY_SP,
+						vec![
+							cx.pat_enum(DUMMY_SP,
+								cx.path(DUMMY_SP,
+									vec![
+										cx.ident_of("rt"),
+										cx.ident_of("Ok"),
+									]
+								),
+								vec![capture_pattern]
+							)
+						],
+						and_then
+					),
+				]
+			)
 		},
 		AstSequence(nodes) => {
 			// We need to do this *backwards* because in order to generate the AST for a node, we need to have the and_then AST.
@@ -480,8 +592,10 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 
 			and_then
 		},
-		AstOptional(_) => {
-			fail!("NYI - optional expr gen")
+		AstOptional(box node) => {
+			// Desugars into ($node|).
+			let alts = vec![node, AstSequence(vec![])];
+			gen_ast_scan_expr(cx, AstAlternates(alts), and_then)
 		},
 		AstCapture(ident, ty) => {
 			/*quote_expr!(cx, {
@@ -529,8 +643,304 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 				]
 			)
 		},
-		AstRepetition { node: _, sep: _, range: _ } => {
-			fail!("NYI - repetition expr gen")
+		AstRepetition { node, sep, range } => {
+			let sep_captures = sep.as_ref()
+				.map(|sep| enumerate_captures(&**sep))
+				.unwrap_or(TreeMap::new());
+
+			let RepeatRange(range_min, range_max) = range;
+			let range_max = range_max.unwrap_or(::std::uint::MAX);
+
+			let range_min = cx.expr_uint(DUMMY_SP, range_min);
+			let range_max = cx.expr_uint(DUMMY_SP, range_max);
+
+			/*let node_and_then = quote_expr!(cx, {
+				(cur, $(capture_idents),*)
+			});*/
+			let node_and_then = cx.expr_ok(DUMMY_SP, cx.expr_tuple(DUMMY_SP,
+				Some(quote_expr!(cx, cur)).into_iter()
+					.chain(captures.iter().map(|(&i,&(sp, _))| cx.expr_ident(sp, i)))
+					.collect()
+			));
+			let node_scan = gen_ast_scan_expr(cx, *node, node_and_then);
+			/*let node_pat = quote_pat!(cx,
+				(_cur, $(capture_idents),*)
+			);*/
+			let node_pat = cx.pat_tuple(DUMMY_SP,
+				Some(quote_pat!(cx, _cur)).into_iter()
+					.chain(captures.iter().map(|(&i,&(sp, _))| cx.pat_ident(sp, i)))
+					.collect()
+			);
+			/*let rep_result = quote_expr!(cx,
+				(cur, $(vec_ $~ capture_idents),*)
+			);*/
+			let rep_result = cx.expr_tuple(DUMMY_SP,
+				Some(quote_expr!(cx, cur)).into_iter()
+					.chain(captures.iter()
+						.map(|(&i,&(sp, _))|
+							cx.expr_ident(sp,
+								cx.ident_of(format!("vec_{}",i.as_str()).as_slice())
+							)
+						)
+					)
+					.collect()
+			);
+			/*let sep_and_then = quote_expr!(cx, {
+				(cur, $(sep_capture_idents),*)
+			});*/
+			let sep_and_then = cx.expr_ok(DUMMY_SP, cx.expr_tuple(DUMMY_SP,
+				Some(quote_expr!(cx, cur)).into_iter()
+					.chain(sep_captures.iter().map(|(&i,&(sp, _))| cx.expr_ident(sp, i)))
+					.collect()
+			));
+			/*let sep_pat = quote_pat!(cx,
+				(_cur, $(sep_capture_idents),*)
+			);*/
+			let sep_pat = cx.pat_tuple(DUMMY_SP,
+				Some(quote_pat!(cx, _cur)).into_iter()
+					.chain(sep_captures.iter().map(|(&i,&(sp,_))| cx.pat_ident(sp, i)))
+					.collect()
+			);
+			let sep_scan = match sep {
+				None => None,
+				Some(box sep) => Some(gen_ast_scan_expr(cx, sep, sep_and_then))
+			};
+			/*let rep_scan = quote_expr!(cx, {
+				let mut cur = cur;
+				let mut err = rt::None::<rt::ScanError>;
+				let mut repeats = 0;
+				let mut trailing_sep = false;
+				$(let mut vec_ $~ $capture_idents : Vec<$capture_tys> = vec![];)*
+
+				while repeats < $range_max {
+					$if let Some(sep_scan) = sep_scan {
+						if repeats > 0 {
+							match $sep_scan {
+								Err(_err) => {
+									err = rt::Some(_err);
+									break;
+								},
+								Ok($sep_pat) => {
+									cur = _cur;
+									trailing_sep = true;
+									$(vec_ $~ $sep_capture_idents.push($sep_capture_idents);)*
+								}
+							}
+						}
+					}
+					match $node_scan {
+						Err(_err) => {
+							err = rt::Some(_err);
+							break;
+						},
+						Ok($node_pat) => {
+							cur = _cur;
+							repeats += 1;
+							trailing_sep = false;
+							$(vec_ $~ $capture_idents.push($capture_idents);)*
+						}
+					}
+				}
+
+				if $range_min <= repeats && !trailing_sep {
+					rt::Ok($rep_result)
+				} else {
+					match err {
+						rt::None => {
+							// No error, but we didn't get enough matches.
+							rt::Err(cur.expected_min_repeats($range_min, repeats))
+						},
+						rt::Some(err) => rt::Err(err)
+					}
+				}
+			});*/
+			let rep_scan = cx.expr_block(cx.block(DUMMY_SP,
+				vec![
+					quote_stmt!(cx, let mut cur = cur;),
+					quote_stmt!(cx, let mut err = rt::None::<rt::ScanError>;),
+					quote_stmt!(cx, let mut repeats = 0u;),
+					quote_stmt!(cx, let mut trailing_sep = false;),
+				] + captures.iter().map(|(&ident, &(sp, ref ty))| {
+					let ty = ty.as_ref().map(|ty| ty.clone()).unwrap_or(cx.ty_infer(sp));
+					cx.stmt_let_typed(
+						sp,
+						/*mutbl:*/true,
+						cx.ident_of(format!("vec_{}",ident.as_str()).as_slice()),
+						quote_ty!(cx, rt::Vec<$ty>),
+						quote_expr!(cx, rt::Vec::new())
+					)
+				}).collect::<Vec<_>>() + vec![
+					cx.stmt_expr(
+						cx.expr(DUMMY_SP,
+							ast::ExprWhile(
+								quote_expr!(cx, repeats < $range_max),
+								cx.block(DUMMY_SP,
+									vec![
+										match sep_scan {
+											None => quote_stmt!(cx, ();),
+											Some(sep_scan) => {
+												cx.stmt_expr(
+													cx.expr_if(DUMMY_SP,
+														quote_expr!(cx, repeats > 0),
+														cx.expr_match(DUMMY_SP,
+															sep_scan,
+															vec![
+																quote_arm!(cx,
+																	rt::Err(_err) => {
+																		err = rt::Some(_err);
+																		break;
+																	},
+																),
+																cx.arm(DUMMY_SP,
+																	vec![
+																		cx.pat_ok(DUMMY_SP, sep_pat),
+																	],
+																	cx.expr_block(cx.block(DUMMY_SP,
+																		vec![
+																			quote_stmt!(cx, cur = _cur;),
+																			quote_stmt!(cx, trailing_sep = true;),
+																		] + sep_captures.iter().map(|(&ident, &(sp, _))| {
+																			cx.stmt_expr(cx.expr_method_call(DUMMY_SP,
+																				cx.expr_ident(DUMMY_SP,
+																					cx.ident_of(format!("vec_{}", ident.as_str()).as_slice())
+																				),
+																				cx.ident_of("push"),
+																				vec![
+																					cx.expr_ident(sp, ident),
+																				]
+																			))
+																		}).collect::<Vec<_>>(),
+																		None
+																	))
+																)
+															]
+														),
+														None
+													)
+												)
+											}
+										}
+									],
+									Some(cx.expr_match(DUMMY_SP,
+										node_scan,
+										vec![
+											quote_arm!(cx,
+												rt::Err(_err) => {
+													err = rt::Some(_err);
+													break;
+												},
+											),
+											cx.arm(DUMMY_SP,
+												vec![
+													cx.pat_ok(DUMMY_SP, node_pat),
+												],
+												cx.expr_block(cx.block(DUMMY_SP,
+													vec![
+														quote_stmt!(cx, cur = _cur;),
+														quote_stmt!(cx, repeats += 1;),
+														quote_stmt!(cx, trailing_sep = false;),
+													] + captures.iter().map(|(&ident, &(sp, _))| {
+														cx.stmt_expr(cx.expr_method_call(DUMMY_SP,
+															cx.expr_ident(DUMMY_SP,
+																cx.ident_of(format!("vec_{}",ident.as_str()).as_slice())
+															),
+															cx.ident_of("push"),
+															vec![
+																cx.expr_ident(sp, ident),
+															]
+														))
+													}).collect::<Vec<_>>(),
+													None
+												))
+											)
+										]
+									))
+								),
+								None
+							)
+						)
+					),
+				],
+				Some(quote_expr!(cx,
+					if $range_min <= repeats && !trailing_sep {
+						rt::Ok($rep_result)
+					} else {
+						match err {
+							rt::None => {
+								// No error, but we didn't get enough matches.
+								rt::Err(cur.expected_min_repeats($range_min, repeats))
+							},
+							rt::Some(err) => rt::Err(err)
+						}
+					}
+				))
+			));
+			/*let rep_pat = quote_pat!(cx,
+				(cur, $(captures),*)
+			);*/
+			let rep_pat = cx.pat_tuple(DUMMY_SP,
+				Some(quote_pat!(cx, cur)).into_iter()
+					.chain(captures.iter().map(|(&i,&(sp,_))| cx.pat_ident(sp, i)))
+					.collect()
+			);
+			/*quote_expr!(cx, {
+				match $rep_scan {
+					Err(err) => Err(err),
+					Ok($rep_pat) => $and_then
+				}
+			})
+			*/
+			cx.expr_match(DUMMY_SP,
+				rep_scan,
+				vec![
+					quote_arm!(cx, Err(err) => Err(err),),
+					cx.arm(DUMMY_SP,
+						vec![
+							cx.pat_ok(DUMMY_SP, rep_pat),
+						],
+						and_then
+					)
+				]
+			)
+		},
+	}
+}
+
+// Annoyingly, Span doesn't implement Ord, hence why we have to split this up.
+type CaptureMap = TreeMap<ast::Ident, (codemap::Span, Option<P<ast::Ty>>)>;
+
+fn enumerate_captures(node: &PatAst) -> CaptureMap {
+	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstRepetition};
+	debug!("enumerate_captures(&{})", node);
+
+	fn merge(mut lhs: CaptureMap, rhs: CaptureMap) -> CaptureMap {
+		// TODO: Ensure types are the same.
+		lhs.extend(rhs.into_iter());
+		lhs
+	}
+
+	match node {
+		&AstAlternates(ref nodes) | &AstSequence(ref nodes) => {
+			nodes.iter().map(enumerate_captures).fold(TreeMap::new(), |a,b| merge(a,b))
+		},
+		&AstText(_) => {
+			TreeMap::new()
+		},
+		&AstOptional(ref node) => {
+			enumerate_captures(&**node)
+		},
+		&AstCapture(ident, ref ty) => {
+			let mut set = TreeMap::new();
+			set.insert(ident.node, (ident.span, ty.clone()));
+			set
+		},
+		&AstRepetition { ref node, ref sep, range: _ } => {
+			let mut captures = enumerate_captures(&**node);
+			match sep {
+				&Some(ref sep) => captures = merge(captures, enumerate_captures(&**sep)),
+				&None => ()
+			}
+			captures
 		},
 	}
 }
