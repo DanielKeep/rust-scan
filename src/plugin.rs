@@ -742,7 +742,12 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 					}
 				}
 
-				if $range_min <= repeats && !trailing_sep {
+				// Hack to get around not being able to mark expressions with attributes.
+				#[allow(type_limits)]
+				#[inline(always)]
+				fn check_repeats(got: uint) -> bool { $range_min <= got }
+
+				if check_repeats(repeats) && !trailing_sep {
 					rt::Ok($rep_result)
 				} else {
 					match err {
@@ -761,7 +766,8 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 					quote_stmt!(cx, let mut repeats = 0u;),
 					quote_stmt!(cx, let mut trailing_sep = false;),
 				] + captures.iter().map(|(&ident, &(sp, ref ty))| {
-					let ty = ty.as_ref().map(|ty| ty.clone()).unwrap_or(cx.ty_infer(sp));
+					//let ty = ty.as_ref().map(|ty| ty.clone()).unwrap_or(cx.ty_infer(sp));
+					let ty = cx.ty_infer(sp);
 					cx.stmt_let_typed(
 						sp,
 						/*mutbl:*/true,
@@ -860,9 +866,17 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 							)
 						)
 					),
+					cx.stmt_item(DUMMY_SP,
+						quote_item!(cx,
+							// Hack to get around not being able to mark expressions with attributes.
+							#[allow(type_limits)]
+							#[inline(always)]
+							fn check_repeats(got: uint) -> bool { $range_min <= got }
+						).unwrap()
+					),
 				],
 				Some(quote_expr!(cx,
-					if $range_min <= repeats && !trailing_sep {
+					if check_repeats(repeats) && !trailing_sep {
 						rt::Ok($rep_result)
 					} else {
 						match err {
