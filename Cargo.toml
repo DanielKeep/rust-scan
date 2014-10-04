@@ -7,7 +7,7 @@ authors = ["Daniel Keep <daniel.keep@gmail.com>"]
 [lib]
 
 name = "scan"
-type = ["dylib"]
+crate-type = ["dylib"]
 plugin = true
 
 [dependencies.scan_util]
