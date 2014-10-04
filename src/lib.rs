@@ -231,7 +231,6 @@ fn identify_banana<S: Str>(s: S) -> &'static str {
 }
 ```
 */
-#![feature(managed_boxes)]
 #![feature(phase)]
 #![feature(plugin_registrar)]
 #![feature(quote)]
