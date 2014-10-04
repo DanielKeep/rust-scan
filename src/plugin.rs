@@ -644,6 +644,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 			)
 		},
 		AstRepetition { node, sep, range } => {
+			let node_captures = enumerate_captures(&*node);
 			let sep_captures = sep.as_ref()
 				.map(|sep| enumerate_captures(&**sep))
 				.unwrap_or(TreeMap::new());
@@ -655,20 +656,20 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 			let range_max = cx.expr_uint(DUMMY_SP, range_max);
 
 			/*let node_and_then = quote_expr!(cx, {
-				(cur, $(capture_idents),*)
+				(cur, $(node_capture_idents),*)
 			});*/
 			let node_and_then = cx.expr_ok(DUMMY_SP, cx.expr_tuple(DUMMY_SP,
 				Some(quote_expr!(cx, cur)).into_iter()
-					.chain(captures.iter().map(|(&i,&(sp, _))| cx.expr_ident(sp, i)))
+					.chain(node_captures.iter().map(|(&i,&(sp, _))| cx.expr_ident(sp, i)))
 					.collect()
 			));
 			let node_scan = gen_ast_scan_expr(cx, *node, node_and_then);
 			/*let node_pat = quote_pat!(cx,
-				(_cur, $(capture_idents),*)
+				(_cur, $(node_capture_idents),*)
 			);*/
 			let node_pat = cx.pat_tuple(DUMMY_SP,
 				Some(quote_pat!(cx, _cur)).into_iter()
-					.chain(captures.iter().map(|(&i,&(sp, _))| cx.pat_ident(sp, i)))
+					.chain(node_captures.iter().map(|(&i,&(sp, _))| cx.pat_ident(sp, i)))
 					.collect()
 			);
 			/*let rep_result = quote_expr!(cx,
@@ -845,7 +846,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 														quote_stmt!(cx, cur = _cur;),
 														quote_stmt!(cx, repeats += 1;),
 														quote_stmt!(cx, trailing_sep = false;),
-													] + captures.iter().map(|(&ident, &(sp, _))| {
+													] + node_captures.iter().map(|(&ident, &(sp, _))| {
 														cx.stmt_expr(cx.expr_method_call(DUMMY_SP,
 															cx.expr_ident(DUMMY_SP,
 																cx.ident_of(format!("vec_{}",ident.as_str()).as_slice())
