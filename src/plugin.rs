@@ -42,7 +42,7 @@ pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]
 	let mut p = cx.new_parser_from_tts(tts);
 
 	let setup_stmts = vec![
-		quote_stmt!(cx, let line = ::std::io::stdin().read_line();),
+		quote_stmt!(cx, let line = rt::io::stdin_read_line();),
 		quote_stmt!(cx, let line_str = match &line {
 			&Err(ref err) => Err(rt::ScanIoError(err.clone())),
 			&Ok(ref line) => Ok(line.as_slice().trim_right_chars('\n').trim_right_chars('\r'))
@@ -98,6 +98,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 			pub use std::vec::Vec;
 			pub use self::scan_util::{
 				Cursor, ScanCursor,
+				io,
 				tokenizer,
 				whitespace,
 				ScanError, NothingMatched, OtherScanError, ScanIoError,
