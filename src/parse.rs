@@ -36,14 +36,16 @@
 
 # Tokenisers
 
-These can be specified on a pattern using the `#[tokens="..."]` syntax.
+These can be specified on a pattern using the `#[tokenizer="..."]` syntax.
 
-Note that all tokenisers have an implicit fallback wherein if no token is generated, the next character is turned into a token.  For example, the string `"How 'ya doin'?"`, assuming `#[tokenize="words_and_numbers"]` and `#[space="ignore"]` produces the tokens `"How"`, `"'"`, `"ya"`, `"doin"`, `"'"`, `"?"`.
+Note that all tokenisers have an implicit fallback wherein if no token is generated, the next character is turned into a token.  For example, the string `"How 'ya doin'?"`, assuming `#[tokenizer="WordsAndInts"]` and `#[space="Ignore"]` produces the tokens `"How"`, `"'"`, `"ya"`, `"doin"`, `"'"`, `"?"`.
 
-* `words_and_ints` (default) - each token is one or more characters in the L? category
-* `idents_and_ints` - each token is either one or more characters in the Nd category, or a single XID_Start character followed by zero or more XID_Continue characters.
-* `non_space` - each token is one or more contiguous characters which do not have the WSpace property.
-* `explicit` - each quoted string literal is turned into a single token.
+* `WordsAndInts` (default) - each token is one or more characters in the L? category
+* `IdentsAndInts` - each token is either one or more characters in the Nd category, or a single XID_Start character followed by zero or more XID_Continue characters.
+* `SpaceDelimited` - each token is one or more contiguous characters which do not have the WSpace property.
+* `Explicit` - each quoted string literal is turned into a single token.
+
+If you wish to use a different tokenizer at runtime, you can specify it with `#[runtime_tok="..."]`.  Note that in addition to the above values, `runtime_tok` can use any path to a value which implements the `Tokenizer` trait.
 
 # Whitespace Policies
 
@@ -80,20 +82,86 @@ pub use self::scan_pattern::RepeatRange;
 #[deriving(Show)]
 pub enum ScanArm {
 	FallbackArm(Option<Spanned<ast::Ident>>),
-	PatternArm(PatAst, Option<Spanned<ast::Ident>>),
+	PatternArm(PatAst, Option<Spanned<ast::Ident>>, ScanAttrs),
+}
+
+#[deriving(Show)]
+pub struct ScanAttrs {
+	pub pat_tok: ArmTokenizer,
+	pub inp_tok: String,
+}
+
+#[deriving(Show)]
+pub enum ArmTokenizer {
+	WordsAndInts,
+	IdentsAndInts,
+	SpaceDelimited,
+	ExplicitTok,
 }
 
 pub fn parse_scan_arm(cx: &mut ExtCtxt, p: &mut Parser) -> (ScanArm, P<ast::Expr>) {
 	debug!("parse_scan_arm(cx, p @ {})", p.token);
-	let arm_attrs = p.parse_outer_attributes();
-	assert!(arm_attrs.len() == 0, "NYI");
-	let arm_pat = parse_scan_pattern(cx, p);
+	let arm_attrs = parse_scan_arm_attrs(cx, p);
+	let arm_pat = parse_scan_pattern(cx, p, arm_attrs);
 	let arm_expr = parse_arm_expr(cx, p);
 	(arm_pat, arm_expr)
 }
 
-fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArm {
-	debug!("parse_scan_pattern(cx, p @ {})", p.token);
+fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanAttrs {
+	debug!("parse_scan_arm_attrs(cx, p @ {})", p.token);
+
+	fn lit_str<'a>(lit: &'a ast::Lit) -> Option<&'a str> {
+		match &lit.node {
+			&ast::LitStr(ref is, _) => Some(is.get()),
+			_ => None
+		}
+	}
+
+	let mut pat_tok = None;
+	let mut inp_tok = None;
+
+	for attr in p.parse_outer_attributes().into_iter() {
+		match attr.node.value.node {
+			ast::MetaNameValue(ref name, ref value) if name.get() == "tokenizer" => {
+				let value_span = value.span;
+				let value = lit_str(value).unwrap_or_else(||
+					cx.span_fatal(value_span, "tokenizer must be a string"));
+
+				let (tok_enum, tok_str) = match value {
+					"WordsAndInts" => (WordsAndInts, "WordsAndInts"),
+					"IdentsAndInts" => (IdentsAndInts, "IdentsAndInts"),
+					"SpaceDelimited" => (SpaceDelimited, "SpaceDelimited"),
+					"Explicit" => (ExplicitTok, "Explicit"),
+					_ => cx.span_fatal(value_span, "unrecognised tokeniser")
+				};
+
+				pat_tok = Some(tok_enum);
+				if inp_tok.is_none() {
+					inp_tok = Some(format!("rt::tokenizer::{}", tok_str));
+				}
+			},
+			ast::MetaNameValue(ref name, ref value) if name.get() == "runtime_tok" => {
+				let value = lit_str(value).unwrap_or_else(||
+					cx.span_fatal(value.span, "runtime_tok must be a string"));
+				inp_tok = Some(value.into_string());
+			},
+			_ => {
+				cx.span_fatal(attr.span, "unrecognised attribute")
+			}
+		}
+	}
+
+	let pat_tok = pat_tok.unwrap_or(WordsAndInts);
+	let inp_tok = inp_tok.unwrap_or("rt::tokenizer::WordsAndInts".into_string());
+
+	ScanAttrs {
+		pat_tok: pat_tok,
+		inp_tok: inp_tok,
+	}
+}
+
+fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser, attrs: ScanAttrs) -> ScanArm {
+	debug!("parse_scan_pattern(cx, p @ {}, {})", p.token, attrs);
 	fn parse_fallback_ident(_: &mut ExtCtxt, p: &mut Parser) -> Option<Spanned<ast::Ident>> {
 		if p.eat(&token::UNDERSCORE) {
 			None
@@ -123,11 +191,11 @@ fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArm {
 			p.expect(&token::DOTDOT);
 			let ident = parse_fallback_ident(cx, p);
 			p.expect(&token::FAT_ARROW);
-			PatternArm(pat_ast, ident)
+			PatternArm(pat_ast, ident, attrs)
 		},
 		token::FAT_ARROW => {
 			// No fallback.
-			PatternArm(pat_ast, None)
+			PatternArm(pat_ast, None, attrs)
 		},
 		_ => fail!()
 	}

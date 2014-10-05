@@ -10,7 +10,7 @@ use syntax::parse::token;
 use syntax::ptr::P;
 
 use parse::parse_scan_arm;
-use parse::{ScanArm, FallbackArm, PatternArm};
+use parse::{ScanArm, FallbackArm, PatternArm, ScanAttrs};
 use parse::PatAst;
 
 use scan_util::{Tokenizer, Whitespace};
@@ -67,7 +67,7 @@ fn parse_scan_body(cx: &mut ExtCtxt, p: &mut Parser, sp: codemap::Span) -> (Vec<
 		debug!("parse_scan_body - parsing scan arm");
 		match parse_scan_arm(cx, p) {
 			arm @ (FallbackArm(_), _) => fallback = Some(arm),
-			arm @ (PatternArm(_, _), _) => arms.push(arm),
+			arm @ (PatternArm(..), _) => arms.push(arm),
 		}
 	}
 
@@ -149,13 +149,6 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 				/*stmts:*/{
 					let mut stmts = vec![
 						quote_stmt!(cx,
-							let cur = rt::Cursor::new(
-								input,
-								rt::tokenizer::WordsAndInts,
-								rt::whitespace::Ignore);
-						),
-						quote_stmt!(cx,
-							//let mut result = rt::Err(rt::NothingMatched);
 							let mut result: rt::Result<_, rt::ScanError>;
 						),
 					];
@@ -231,8 +224,15 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 		]
 	);
 
-	let arm_expr = match arm_pat {
-		PatternArm(pattern, tail) => {
+	let (cur_stmt, arm_expr) = match arm_pat {
+		PatternArm(pattern, tail, attrs) => {
+			let tok = cx.expr_path(cx.path(DUMMY_SP,
+				attrs.inp_tok.as_slice().split_str("::").map(|s| cx.ident_of(s)).collect()
+			));
+			let sp = quote_expr!(cx, rt::whitespace::Ignore);
+			let cur_stmt = quote_stmt!(cx,
+				let cur = rt::Cursor::new(input, $tok, $sp);
+			);
 			let and_then = match tail {
 				None => {
 					/*quote_expr!(cx, {
@@ -280,26 +280,32 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 					)
 				}
 			};
-			gen_ast_scan_expr(cx, pattern, and_then)
+			(Some(cur_stmt), gen_ast_scan_expr(cx, &attrs, pattern, and_then))
 		},
 		FallbackArm(None) => {
-			arm_expr
+			(None, arm_expr)
 		},
 		FallbackArm(Some(ident)) => {
 			/*quote_expr!(cx, {
-				let $ident = cur.tail_str();
+				let $ident = input;
 				$arm_expr
 			})*/
-			cx.expr_block(
+			(None, cx.expr_block(
 				cx.block(DUMMY_SP,
 					vec![
-						quote_stmt!(cx, let $ident = cur.tail_str();),
+						cx.stmt_let(ident.span, /*mutbl:*/false, ident.node, quote_expr!(cx, input)),
 					],
 					Some(arm_expr)
 				)
-			)
+			))
 		},
 	};
+
+	// Merge cur_stmt and arm_expr into a block.
+	let arm_expr = cx.expr_block(cx.block(DUMMY_SP,
+		cur_stmt.into_iter().collect(),
+		Some(arm_expr)
+	));
 
 	debug!("gen_arm_stmt - done building arm_expr");
 
@@ -392,9 +398,9 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 	}
 }
 
-fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> P<ast::Expr> {
+fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then: P<ast::Expr>) -> P<ast::Expr> {
 	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstRepetition, RepeatRange};
-	debug!("gen_ast_scan_expr(cx, {}, {})", node, and_then);
+	debug!("gen_ast_scan_expr(cx, {}, {}, {})", attrs, node, and_then);
 
 	let captures = enumerate_captures(&node);
 
@@ -434,7 +440,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 				};
 
 				// Now generate the match expr.
-				gen_ast_scan_expr(cx, node, alt_and_then)
+				gen_ast_scan_expr(cx, attrs, node, alt_and_then)
 			}).collect();
 
 			// We now need to turn the vector of `Expr`s into a chain of `or_else` calls.
@@ -504,16 +510,24 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 		AstSequence(nodes) => {
 			// We need to do this *backwards* because in order to generate the AST for a node, we need to have the and_then AST.
 			nodes.into_iter().rev()
-				.fold(and_then, |and_then, node| gen_ast_scan_expr(cx, node, and_then))
+				.fold(and_then, |and_then, node| gen_ast_scan_expr(cx, attrs, node, and_then))
 		},
 		AstText(s) => {
+			use parse::{WordsAndInts, IdentsAndInts, SpaceDelimited, ExplicitTok};
+			use scan_util::{Tokenizer, tokenizer};
+
 			// TODO: allow these to be overridden.
-			let tc = ::scan_util::tokenizer::WordsAndInts;
+			let tc = match attrs.pat_tok {
+				WordsAndInts => box tokenizer::WordsAndInts as Box<Tokenizer>,
+				IdentsAndInts => box tokenizer::IdentsAndInts as Box<Tokenizer>,
+				SpaceDelimited => box tokenizer::SpaceDelimited as Box<Tokenizer>,
+				ExplicitTok => box tokenizer::Explicit as Box<Tokenizer>,
+			};
 			let sp = ::scan_util::whitespace::Ignore;
 
 			let mut and_then = and_then;
 
-			for tok in text_to_tokens(s.as_slice(), &tc, &sp).into_iter().rev() {
+			for tok in text_to_tokens(s.as_slice(), &*tc, &sp).into_iter().rev() {
 				let tok_expr = str_to_expr(cx, tok);
 				/*and_then = quote_expr!(cx, {
 					match cur.expect_tok($tok_expr) {
@@ -605,7 +619,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 		AstOptional(box node) => {
 			// Desugars into ($node|).
 			let alts = vec![node, AstSequence(vec![])];
-			gen_ast_scan_expr(cx, AstAlternates(alts), and_then)
+			gen_ast_scan_expr(cx, attrs, AstAlternates(alts), and_then)
 		},
 		AstCapture(ident, ty) => {
 			/*quote_expr!(cx, {
@@ -673,7 +687,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 					.chain(node_captures.iter().map(|(&i,&(sp, _))| cx.expr_ident(sp, i)))
 					.collect()
 			));
-			let node_scan = gen_ast_scan_expr(cx, *node, node_and_then);
+			let node_scan = gen_ast_scan_expr(cx, attrs, *node, node_and_then);
 			/*let node_pat = quote_pat!(cx,
 				(_cur, $(node_capture_idents),*)
 			);*/
@@ -714,7 +728,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, node: PatAst, and_then: P<ast::Expr>) -> 
 			);
 			let sep_scan = match sep {
 				None => None,
-				Some(box sep) => Some(gen_ast_scan_expr(cx, sep, sep_and_then))
+				Some(box sep) => Some(gen_ast_scan_expr(cx, attrs, sep, sep_and_then))
 			};
 			/*let rep_scan = quote_expr!(cx, {
 				let mut cur = cur;
