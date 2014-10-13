@@ -137,7 +137,7 @@ fn parse_arm_expr(_: &mut ExtCtxt, p: &mut Parser) -> P<ast::Expr> {
 	debug!("parse_arm_expr(cx, p @ {})", p.token);
 	// Nicked from libsyntax/parse/parser.rs, fn parse_arm.
 	debug!("parse_arm_expr - parsing stmt expr");
-	let arm_expr = p.parse_expr_res(parser::RestrictionStmtExpr);
+	let arm_expr = p.parse_expr_res(parser::RESTRICTION_STMT_EXPR);
 
 	debug!("parse_arm_expr - p @ {}", p.token);
 
