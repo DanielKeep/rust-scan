@@ -59,6 +59,31 @@ pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]
 	MacExpr::new(scan_expr)
 }
 
+pub fn expand_scanln_from(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]) -> Box<MacResult+'static> {
+	debug!("expand_scanln_from(cx, sp, tts)");
+	let mut p = cx.new_parser_from_tts(tts);
+
+	let input_arg = p.parse_expr();
+	p.expect(&token::COMMA);
+
+	let setup_stmts = vec![
+		quote_stmt!(cx, let line = rt::io::read_line($input_arg);),
+		quote_stmt!(cx, let line_str = match &line {
+			&Err(ref err) => Err(rt::ScanIoError(err.clone())),
+			&Ok(ref line) => Ok(line.as_slice().trim_right_chars('\n').trim_right_chars('\r'))
+		};),
+	];
+
+	let input_expr = quote_expr!(cx, line_str);
+
+	let (arms, fallback) = parse_scan_body(cx, &mut p, sp);
+
+	debug!("expand_scanln - making scan expression...");
+	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback);
+	debug!("expand_scanln - scan_expr: {}", scan_expr);
+	MacExpr::new(scan_expr)
+}
+
 fn parse_scan_body(cx: &mut ExtCtxt, p: &mut Parser, sp: codemap::Span) -> (Vec<(ScanArm, P<ast::Expr>)>, Option<(ScanArm, P<ast::Expr>)>) {
 	let mut arms = vec![];
 	let mut fallback = None;
