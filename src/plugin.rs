@@ -236,27 +236,20 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 			let and_then = match tail {
 				None => {
 					/*quote_expr!(cx, {
-						match cur.pop_token() {
-							Some((tok, cur)) => rt::Err(
-								rt::OtherScanError(
-									format!("expected end of input, got `{}`", tok),
-									cur.consumed()
-								)
-							),
-							None => $arm_expr
+						match cur.expect_eof() {
+							rt::Err(err) => rt::Err(err),
+							rt::Ok(()) => $arm_expr
 						}
 					})*/
 					cx.expr_match(DUMMY_SP,
-						quote_expr!(cx, cur.pop_token()),
+						quote_expr!(cx, cur.expect_eof()),
 						vec![
 							cx.arm(DUMMY_SP,
-								vec![quote_pat!(cx, Some((_, cur)))],
-								quote_expr!(cx,
-									rt::Err(cur.expected_eof())
-								)
+								vec![quote_pat!(cx, rt::Err(err))],
+								quote_expr!(cx, rt::Err(err))
 							),
 							cx.arm(DUMMY_SP,
-								vec![quote_pat!(cx, None)],
+								vec![quote_pat!(cx, rt::Ok(()))],
 								arm_expr
 							)
 						]
