@@ -162,6 +162,7 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanAttrs {
 
 fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser, attrs: ScanAttrs) -> ScanArm {
 	debug!("parse_scan_pattern(cx, p @ {}, {})", p.token, attrs);
+	debug!("parse_scan_pattern(cx, p @ {})", p.token);
 	fn parse_fallback_ident(_: &mut ExtCtxt, p: &mut Parser) -> Option<Spanned<ast::Ident>> {
 		if p.eat(&token::UNDERSCORE) {
 			None
@@ -205,7 +206,7 @@ fn parse_arm_expr(_: &mut ExtCtxt, p: &mut Parser) -> P<ast::Expr> {
 	debug!("parse_arm_expr(cx, p @ {})", p.token);
 	// Nicked from libsyntax/parse/parser.rs, fn parse_arm.
 	debug!("parse_arm_expr - parsing stmt expr");
-	let arm_expr = p.parse_expr_res(parser::RestrictionStmtExpr);
+	let arm_expr = p.parse_expr_res(parser::RESTRICTION_STMT_EXPR);
 
 	debug!("parse_arm_expr - p @ {}", p.token);
 

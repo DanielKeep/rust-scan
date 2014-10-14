@@ -404,6 +404,9 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 
 	let captures = enumerate_captures(&node);
 
+
+	let captures = enumerate_captures(&node);
+
 	match node {
 		AstAlternates(nodes) => {
 			assert!(nodes.len() > 0);
