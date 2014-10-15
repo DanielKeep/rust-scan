@@ -156,10 +156,10 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 	debug!("make_scan_expr - generating ok arm");
 	let ok_arm = cx.arm(
 		DUMMY_SP,
-		vec![quote_pat!(cx, rt::Ok(input))],
+		vec![quote_pat!(cx, rt::Ok(_input))],
 		/*quote_expr!(cx, {
 			let cur = rt::Cursor::new(
-				input,
+				_input,
 				rt::tokenizer::WordsAndInts,
 				rt::whitespace::Ignore);
 			//let mut result = rt::Err(rt::NothingMatched);
@@ -256,7 +256,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 			));
 			let sp = quote_expr!(cx, rt::whitespace::Ignore);
 			let cur_stmt = quote_stmt!(cx,
-				let cur = rt::Cursor::new(input, $tok, $sp);
+				let cur = rt::Cursor::new(_input, $tok, $sp);
 			);
 			let and_then = match tail {
 				None => {
@@ -305,13 +305,13 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) 
 		},
 		FallbackArm(Some(ident)) => {
 			/*quote_expr!(cx, {
-				let $ident = input;
+				let $ident = _input;
 				$arm_expr
 			})*/
 			(None, cx.expr_block(
 				cx.block(DUMMY_SP,
 					vec![
-						cx.stmt_let(ident.span, /*mutbl:*/false, ident.node, quote_expr!(cx, input)),
+						cx.stmt_let(ident.span, /*mutbl:*/false, ident.node, quote_expr!(cx, _input)),
 					],
 					Some(arm_expr)
 				)
