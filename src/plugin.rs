@@ -265,26 +265,44 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 		$setup_stmts
 		$match_expr
 	});*/
+	let allow_unused_import = cx.attribute(DUMMY_SP,
+		cx.meta_list(DUMMY_SP,
+			token::intern_and_get_ident("allow"),
+			vec![
+				cx.meta_word(DUMMY_SP, token::intern_and_get_ident("unused_imports")),
+			]
+		)
+	);
 	let expr = cx.expr_block(
 		cx.block_all(DUMMY_SP,
 			/*view_items:*/vec![
 				// This kinda sucks, but I can't find a way around this.  This requires the user to add an explicit `extern crate scan_util;` to their root module.
-				cx.view_use_simple(DUMMY_SP,
-					ast::Inherited,
-					cx.path/*_global*/(DUMMY_SP,
-						vec![
-							cx.ident_of("scan_util"),
-							cx.ident_of("Scanner"),
-						]
+				set_view_item_attrs(
+					vec![
+						allow_unused_import.clone(),
+					],
+					cx.view_use_simple(DUMMY_SP,
+						ast::Inherited,
+						cx.path/*_global*/(DUMMY_SP,
+							vec![
+								cx.ident_of("scan_util"),
+								cx.ident_of("Scanner"),
+							]
+						)
 					)
 				),
-				cx.view_use_simple(DUMMY_SP,
-					ast::Inherited,
-					cx.path/*_global*/(DUMMY_SP,
-						vec![
-							cx.ident_of("scan_util"),
-							cx.ident_of("ScanCursor"),
-						]
+				set_view_item_attrs(
+					vec![
+						allow_unused_import.clone(),
+					],
+					cx.view_use_simple(DUMMY_SP,
+						ast::Inherited,
+						cx.path/*_global*/(DUMMY_SP,
+							vec![
+								cx.ident_of("scan_util"),
+								cx.ident_of("ScanCursor"),
+							]
+						)
 					)
 				),
 			],
@@ -1186,4 +1204,10 @@ fn text_to_tokens<'a>(s: &'a str, tc: &Tokenizer, sp: &Whitespace) -> Vec<&'a st
 
 fn str_to_expr<S: Str>(cx: &mut ExtCtxt, s: S) -> P<ast::Expr> {
 	cx.expr_str(codemap::DUMMY_SP, token::intern_and_get_ident(s.as_slice()))
+}
+
+fn set_view_item_attrs(attrs: Vec<ast::Attribute>, mut vi: ast::ViewItem) -> ast::ViewItem {
+	assert_eq!(vi.attrs.len(), 0);
+	vi.attrs = attrs;
+	vi
 }
