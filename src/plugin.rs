@@ -593,7 +593,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 }
 
 fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then: P<ast::Expr>) -> P<ast::Expr> {
-	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstRepetition, RepeatRange};
+	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition, RepeatRange};
 	debug!("gen_ast_scan_expr(cx, {}, {}, {})", attrs, node, and_then);
 
 	let captures = enumerate_captures(&node);
@@ -938,7 +938,38 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 					))
 				)
 			)
-		}
+		},
+		AstLookahead(box node) => {
+			let node_captures = enumerate_captures(&node);
+			if node_captures.len() > 0 {
+				cx.span_fatal(DUMMY_SP, "negative lookahead assertions cannot have captures");
+			}
+
+			// With a negative lookahead, we don't care about what we match.  We only capture `cur` here to shut the compiler up about unused variables.
+			let node_and_then = quote_expr!(cx, rt::Ok(cur));
+			let node_expr = gen_ast_scan_expr(cx, attrs, node, node_and_then);
+
+			/*quote_expr!(cx, {
+				match $node_expr {
+					rt::Err(_) => $and_then,
+					rt::Ok(_) => rt::Err(cur.expected("negative lookahead to fail"))
+				}
+			})*/
+			cx.expr_match(DUMMY_SP,
+				node_expr,
+				vec![
+					cx.arm(DUMMY_SP,
+						vec![
+							cx.pat_err(DUMMY_SP, quote_pat!(cx, _)),
+						],
+						and_then
+					),
+					quote_arm!(cx,
+						rt::Ok(_) => rt::Err(cur.expected("negative lookahead to fail")),
+					)
+				]
+			)
+		},
 		AstRepetition { node, sep, range } => {
 			let node_captures = enumerate_captures(&*node);
 			let sep_captures = sep.as_ref()
@@ -1220,7 +1251,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 type CaptureMap = TreeMap<ast::Ident, (codemap::Span, Option<P<ast::Ty>>)>;
 
 fn enumerate_captures(node: &PatAst) -> CaptureMap {
-	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstRepetition};
+	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
 	debug!("enumerate_captures(&{})", node);
 
 	fn merge(mut lhs: CaptureMap, rhs: CaptureMap) -> CaptureMap {
@@ -1248,6 +1279,9 @@ fn enumerate_captures(node: &PatAst) -> CaptureMap {
 			let mut captures = enumerate_captures(&**node);
 			captures.insert(ident.node, (ident.span, None));
 			captures
+		},
+		&AstLookahead(ref node) => {
+			enumerate_captures(&**node)
 		}
 		&AstRepetition { ref node, ref sep, range: _ } => {
 			let mut captures = enumerate_captures(&**node);

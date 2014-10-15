@@ -28,7 +28,9 @@
 
 	<maybe-group> := <group> "?"?
 
-	<group> := "(" <alternates> ")"
+	<group> := "(" <lookahead>? <alternates> ")"
+
+	<lookahead> := "?" "!"
 
 	<repetition> := "[" <alternates> "]" <separator>? <repeat-range>
 
@@ -80,7 +82,7 @@ use syntax::parse::parser::Parser;
 use syntax::parse::token;
 use syntax::ptr::P;
 
-pub use self::scan_pattern::{PatAst, AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstRepetition};
+pub use self::scan_pattern::{PatAst, AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
 pub use self::scan_pattern::RepeatRange;
 
 #[deriving(Show)]
@@ -249,6 +251,7 @@ mod scan_pattern {
 		AstOptional(Box<PatAst>),
 		AstCapture(Spanned<ast::Ident>, Option<P<ast::Ty>>),
 		AstSliceCapture(Spanned<ast::Ident>, Box<PatAst>),
+		AstLookahead(Box<PatAst>),
 		AstRepetition {
 			pub node: Box<PatAst>,
 			pub sep: Option<Box<PatAst>>,
@@ -421,10 +424,21 @@ mod scan_pattern {
 			return None
 		}
 
+		let lookahead = if p.eat(&token::QUESTION) {
+			p.expect(&token::NOT);
+			true
+		} else {
+			false
+		};
+
 		let node = parse_alternates(cx, p);
 		p.expect(&token::RPAREN);
 
-		Some(node)
+		if lookahead {
+			Some(AstLookahead(box node))
+		} else {
+			Some(node)
+		}
 	}
 
 	// <repetition> := "[" <alternates> "]" <separator>? <repeat-range>
