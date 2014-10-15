@@ -207,7 +207,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 				// This kinda sucks, but I can't find a way around this.  This requires the user to add an explicit `extern crate scan_util;` to their root module.
 				cx.view_use_simple(DUMMY_SP,
 					ast::Inherited,
-					cx.path_global(DUMMY_SP,
+					cx.path/*_global*/(DUMMY_SP,
 						vec![
 							cx.ident_of("scan_util"),
 							cx.ident_of("Scanner"),
@@ -216,7 +216,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 				),
 				cx.view_use_simple(DUMMY_SP,
 					ast::Inherited,
-					cx.path_global(DUMMY_SP,
+					cx.path/*_global*/(DUMMY_SP,
 						vec![
 							cx.ident_of("scan_util"),
 							cx.ident_of("ScanCursor"),
