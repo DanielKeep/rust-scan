@@ -10,7 +10,9 @@
 
 	<sequence> := <sequence-atom> <sequence-atom>?
 
-	<sequence-atom> := <maybe-text> | <maybe-capture> | <maybe-group> | <repetition>
+	<sequence-atom> := <maybe-capture> | <non-capture-atom>
+
+	<non-capture-atom> := <maybe-text> | <maybe-group> | <repetition>
 
 	<maybe-text> := <text> "?"?
 
@@ -18,7 +20,9 @@
 
 	<maybe-capture> := <capture> "?"?
 
-	<capture> := <identifier> <constraint>?
+	<capture> := <identifier> ( <slice-capture> | <constraint>? )
+
+	<slice-capture> := "=" <non-capture-atom>
 
 	<constraint> := ":" <type>
 
@@ -76,7 +80,7 @@ use syntax::parse::parser::Parser;
 use syntax::parse::token;
 use syntax::ptr::P;
 
-pub use self::scan_pattern::{PatAst, AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstRepetition};
+pub use self::scan_pattern::{PatAst, AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstRepetition};
 pub use self::scan_pattern::RepeatRange;
 
 #[deriving(Show)]
@@ -244,6 +248,7 @@ mod scan_pattern {
 		AstText(String),
 		AstOptional(Box<PatAst>),
 		AstCapture(Spanned<ast::Ident>, Option<P<ast::Ty>>),
+		AstSliceCapture(Spanned<ast::Ident>, Box<PatAst>),
 		AstRepetition {
 			pub node: Box<PatAst>,
 			pub sep: Option<Box<PatAst>>,
@@ -291,11 +296,26 @@ mod scan_pattern {
 		AstSequence(nodes)
 	}
 
-	// <sequence-atom> := <maybe-text> | <maybe-capture> | <maybe-group> | <repetition>
+	// <sequence-atom> := <maybe-capture> | <non-capture-atom>
 	fn try_parse_sequence_atom(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_sequence_atom(cx, p @ {})", p.token);
+		try_parse_maybe_capture(cx, p)
+			.or_else(|| try_parse_non_capture_atom(cx, p))
+	}
+
+	// <non-capture-atom> := <maybe-text> | <maybe-group> | <repetition>
+	fn parse_non_capture_atom(cx: &mut ExtCtxt, p: &mut Parser) -> PatAst {
+		debug!("parse_non_capture_atom(cx, p @ {})", p.token);
+		if let Some(ast) = try_parse_non_capture_atom(cx, p) {
+			ast
+		} else {
+			cx.span_fatal(p.span, "expected text, group or repetition")
+		}
+	}
+
+	fn try_parse_non_capture_atom(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
+		debug!("try_parse_non_capture_atom(cx, p @ {})", p.token);
 		try_parse_maybe_text(cx, p)
-			.or_else(|| try_parse_maybe_capture(cx, p))
 			.or_else(|| try_parse_maybe_group(cx, p))
 			.or_else(|| try_parse_repetition(cx, p))
 	}
@@ -342,7 +362,7 @@ mod scan_pattern {
 			})
 	}
 
-	// <capture> := <identifier> <constraint>?
+	// <capture> := <identifier> ( <slice-capture> | <constraint>? )
 	fn try_parse_capture(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_capture(cx, p @ {})", p.token);
 		let ident = match p.token {
@@ -354,7 +374,21 @@ mod scan_pattern {
 			_ => return None
 		};
 
-		Some(AstCapture(ident, try_parse_constraint(cx, p)))
+		if let Some(sub_pattern) = try_parse_slice_capture(cx, p) {
+			Some(AstSliceCapture(ident, box sub_pattern))
+		} else {
+			Some(AstCapture(ident, try_parse_constraint(cx, p)))
+		}
+	}
+
+	// <slice-capture> := "=" <non-capture-atom>
+	fn try_parse_slice_capture(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
+		debug!("try_parse_slice_capture(cx, p @ {})", p.token);
+		if p.eat(&token::EQ) {
+			Some(parse_non_capture_atom(cx, p))
+		} else {
+			None
+		}
 	}
 
 	// <constraint> := ":" <type>

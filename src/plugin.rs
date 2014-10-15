@@ -593,7 +593,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 }
 
 fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then: P<ast::Expr>) -> P<ast::Expr> {
-	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstRepetition, RepeatRange};
+	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstRepetition, RepeatRange};
 	debug!("gen_ast_scan_expr(cx, {}, {}, {})", attrs, node, and_then);
 
 	let captures = enumerate_captures(&node);
@@ -861,6 +861,84 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 				]
 			)
 		},
+		AstSliceCapture(ident, box node) => {
+			// This is a bit like a cross between a single-branch alternate and a repetition.  We have similar capture-return behaviour to the former, similar sub-pattern scanning to the latter.
+
+			// Get list of captures in the sub-pattern.
+			let node_captures = enumerate_captures(&node);
+
+			// We use this to pass back the scanned capture's cursor and sub-captures.
+			/*let node_and_then = quote_expr!(cx, {
+				(cur $(, $node_captures)*)
+			});*/
+			let node_and_then = cx.expr_ok(DUMMY_SP,
+				cx.expr_tuple(DUMMY_SP,
+					Some(quote_expr!(cx, cur)).into_iter()
+						.chain(
+							node_captures.iter().map(|(&ident, &(sp, _))| {
+								cx.expr_ident(sp, ident)
+							})
+						)
+						.collect()
+				)
+			);
+
+			// Build the expression to scan the sub-pattern.
+			let node_expr = gen_ast_scan_expr(cx, attrs, node, node_and_then);
+
+			// Build the capture pattern.
+			/*let capture_pattern = quote_pat!(cx,
+				(cur $(, $node_captures)*)
+			);*/
+			let capture_pattern = cx.pat_tuple(DUMMY_SP,
+				Some(quote_pat!(cx, cur)).into_iter()
+					.chain(
+						node_captures.keys().map(|&ident| {
+							cx.pat_ident(DUMMY_SP, ident)
+						})
+					)
+					.collect()
+			);
+
+			/*quote_expr!(cx {
+				let start_cur = cur.pop_ws();
+				match $node_expr {
+					Err(err) => Err(err),
+					Ok($capture_pattern) => {
+						let $ident = start_cur.str_slice_to_cur(&cur);
+						$and_then
+					}
+				}
+			})*/
+			cx.expr_block(
+				cx.block(DUMMY_SP,
+					vec![
+						quote_stmt!(cx, let start_cur = cur.pop_ws();),
+					],
+					Some(cx.expr_match(DUMMY_SP,
+						node_expr,
+						vec![
+							quote_arm!(cx, Err(err) => Err(err),),
+							cx.arm(DUMMY_SP,
+								vec![
+									cx.pat_ok(DUMMY_SP, capture_pattern),
+								],
+								cx.expr_block(cx.block(DUMMY_SP,
+									vec![
+										/*quote_stmt!(cx, let $ident = start_cur.str_slice_to_cur(&cur);),*/
+										cx.stmt_let(ident.span,
+											/*mutbl:*/false, ident.node,
+											quote_expr!(cx, start_cur.str_slice_to_cur(&cur))
+										),
+									],
+									Some(and_then)
+								))
+							)
+						]
+					))
+				)
+			)
+		}
 		AstRepetition { node, sep, range } => {
 			let node_captures = enumerate_captures(&*node);
 			let sep_captures = sep.as_ref()
@@ -1142,7 +1220,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 type CaptureMap = TreeMap<ast::Ident, (codemap::Span, Option<P<ast::Ty>>)>;
 
 fn enumerate_captures(node: &PatAst) -> CaptureMap {
-	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstRepetition};
+	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstRepetition};
 	debug!("enumerate_captures(&{})", node);
 
 	fn merge(mut lhs: CaptureMap, rhs: CaptureMap) -> CaptureMap {
@@ -1166,6 +1244,11 @@ fn enumerate_captures(node: &PatAst) -> CaptureMap {
 			set.insert(ident.node, (ident.span, ty.clone()));
 			set
 		},
+		&AstSliceCapture(ident, ref node) => {
+			let mut captures = enumerate_captures(&**node);
+			captures.insert(ident.node, (ident.span, None));
+			captures
+		}
 		&AstRepetition { ref node, ref sep, range: _ } => {
 			let mut captures = enumerate_captures(&**node);
 			match sep {
