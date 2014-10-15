@@ -250,4 +250,5 @@ pub fn plugin_registrar(reg: &mut rustc::plugin::Registry) {
 	reg.register_macro("scan", plugin::expand_scan);
 	reg.register_macro("scanln", plugin::expand_scanln);
 	reg.register_macro("scanln_from", plugin::expand_scanln_from);
+	reg.register_macro("scanner", plugin::expand_scanner);
 }

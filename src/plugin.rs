@@ -4,7 +4,7 @@ use syntax::ast;
 use syntax::codemap;
 use syntax::codemap::DUMMY_SP;
 use syntax::ext::build::AstBuilder;
-use syntax::ext::base::{ExtCtxt, MacExpr, MacResult};
+use syntax::ext::base::{ExtCtxt, MacExpr, MacItems, MacResult};
 use syntax::parse::parser::Parser;
 use syntax::parse::token;
 use syntax::ptr::P;
@@ -14,6 +14,12 @@ use parse::{ScanArm, FallbackArm, PatternArm, ScanAttrs};
 use parse::PatAst;
 
 use scan_util::{Tokenizer, Whitespace};
+
+#[deriving(Show)]
+enum ScanKind {
+	NormalScan,
+	ScannerScan,
+}
 
 pub fn expand_scan(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]) -> Box<MacResult+'static> {
 	debug!("expand_scan(cx, sp, tts)");
@@ -33,7 +39,7 @@ pub fn expand_scan(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]) 
 	let (arms, fallback) = parse_scan_body(cx, &mut p, sp);
 
 	debug!("expand_scan - making scan expression");
-	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback);
+	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback, NormalScan);
 	MacExpr::new(scan_expr)
 }
 
@@ -54,7 +60,7 @@ pub fn expand_scanln(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]
 	let (arms, fallback) = parse_scan_body(cx, &mut p, sp);
 
 	debug!("expand_scanln - making scan expression...");
-	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback);
+	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback, NormalScan);
 	debug!("expand_scanln - scan_expr: {}", scan_expr);
 	MacExpr::new(scan_expr)
 }
@@ -79,9 +85,39 @@ pub fn expand_scanln_from(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::Token
 	let (arms, fallback) = parse_scan_body(cx, &mut p, sp);
 
 	debug!("expand_scanln - making scan expression...");
-	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback);
+	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback, NormalScan);
 	debug!("expand_scanln - scan_expr: {}", scan_expr);
 	MacExpr::new(scan_expr)
+}
+
+pub fn expand_scanner(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]) -> Box<MacResult+'static> {
+	debug!("expand_scanner(cx, sp, tts)");
+	let mut p = cx.new_parser_from_tts(tts);
+
+	let scan_ty = p.parse_ty(/*plus_allowed:*/false);
+	p.expect(&token::COMMA);
+
+	let setup_stmts = vec![];
+
+	let input_expr = quote_expr!(cx, cursor);
+
+	let (arms, fallback) = parse_scan_body(cx, &mut p, sp);
+
+	debug!("expand_scanner - making scan expression...");
+	let scan_expr = make_scan_expr(cx, setup_stmts, input_expr, arms, fallback, ScannerScan);
+	debug!("expand_scanner - scan_expr: {}", scan_expr);
+
+	debug!("expand_scanner - making impl...");
+	let scanner_impl = quote_item!(cx,
+		impl<'a> ::scan_util::Scanner<'a> for $scan_ty {
+			fn scan<Cur: ::scan_util::ScanCursor<'a>>(cursor: &Cur) -> Result<($scan_ty, Cur), ::scan_util::ScanError> {
+				$scan_expr
+			}
+		}
+	).unwrap();
+	debug!("expand_scanner - scanner_impl: {}", scanner_impl);
+
+	MacItems::new(vec![scanner_impl].into_iter())
 }
 
 fn parse_scan_body(cx: &mut ExtCtxt, p: &mut Parser, sp: codemap::Span) -> (Vec<(ScanArm, P<ast::Expr>)>, Option<(ScanArm, P<ast::Expr>)>) {
@@ -111,7 +147,7 @@ fn parse_scan_body(cx: &mut ExtCtxt, p: &mut Parser, sp: codemap::Span) -> (Vec<
 	(arms, fallback)
 }
 
-fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: P<ast::Expr>, arms: Vec<(ScanArm, P<ast::Expr>)>, fallback_arm: Option<(ScanArm, P<ast::Expr>)>) -> P<ast::Expr> {
+fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: P<ast::Expr>, arms: Vec<(ScanArm, P<ast::Expr>)>, fallback_arm: Option<(ScanArm, P<ast::Expr>)>, scan_kind: ScanKind) -> P<ast::Expr> {
 	debug!("make_scan_expr(...)");
 
 	debug!("make_scan_expr - generating module setup statement...");
@@ -135,7 +171,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 
 	debug!("make_scan_expr - generating scan arms...")
 	for (i,arm) in arms.into_iter().enumerate() {
-		scan_arm_stmts.push(gen_arm_stmt(cx, arm, i == 0))
+		scan_arm_stmts.push(gen_arm_stmt(cx, arm, i == 0, scan_kind))
 	}
 
 	match fallback_arm {
@@ -143,55 +179,83 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 		Some(arm) => {
 			debug!("make_scan_expr - generating scan fallback arm...")
 			let is_first = scan_arm_stmts.len() == 0;
-			scan_arm_stmts.push(gen_arm_stmt(cx, arm, is_first))
+			scan_arm_stmts.push(gen_arm_stmt(cx, arm, is_first, scan_kind))
 		}
 	}
 
-	debug!("make_scan_expr - generating error arm");
-	let err_arm = cx.arm(DUMMY_SP,
-		vec![quote_pat!(cx, rt::Err(err))],
-		quote_expr!(cx, rt::Err(err)),
-	);
+	let match_expr = match scan_kind {
+		NormalScan => {
+			debug!("make_scan_expr - generating error arm");
+			let err_arm = cx.arm(DUMMY_SP,
+				vec![quote_pat!(cx, rt::Err(err))],
+				quote_expr!(cx, rt::Err(err)),
+			);
 
-	debug!("make_scan_expr - generating ok arm");
-	let ok_arm = cx.arm(
-		DUMMY_SP,
-		vec![quote_pat!(cx, rt::Ok(_input))],
-		/*quote_expr!(cx, {
-			let cur = rt::Cursor::new(
-				_input,
-				rt::tokenizer::WordsAndInts,
-				rt::whitespace::Ignore);
-			//let mut result = rt::Err(rt::NothingMatched);
-			let mut result: rt::Result<_, rt::ScanError>;
+			debug!("make_scan_expr - generating ok arm");
+			let ok_arm = cx.arm(
+				DUMMY_SP,
+				vec![quote_pat!(cx, rt::Ok(_input))],
+				/*quote_expr!(cx, {
+					let cur = rt::Cursor::new(
+						_input,
+						rt::tokenizer::WordsAndInts,
+						rt::whitespace::Ignore);
+					//let mut result = rt::Err(rt::NothingMatched);
+					let mut result: rt::Result<_, rt::ScanError>;
 
-			$scan_arm_stmts
+					$scan_arm_stmts
 
-			result
-		})*/
-		cx.expr_block(
-			cx.block(DUMMY_SP,
-				/*stmts:*/{
-					let mut stmts = vec![
-						quote_stmt!(cx,
-							let mut result: rt::Result<_, rt::ScanError>;
-						),
-					];
-					stmts.extend(scan_arm_stmts.into_iter());
-					stmts
-				},
-				/*expr:*/Some(cx.expr_ident(DUMMY_SP,
-					cx.ident_of("result")
-				))
+					result
+				})*/
+				cx.expr_block(
+					cx.block(DUMMY_SP,
+						/*stmts:*/{
+							let mut stmts = vec![
+								quote_stmt!(cx,
+									let mut result: rt::Result<_, rt::ScanError>;
+								),
+							];
+							stmts.extend(scan_arm_stmts.into_iter());
+							stmts
+						},
+						/*expr:*/Some(cx.expr_ident(DUMMY_SP,
+							cx.ident_of("result")
+						))
+					)
+				)
+			);
+
+			debug!("make_scan_expr - building match expr");
+			cx.expr_match(DUMMY_SP,
+				input_expr,
+				vec![err_arm, ok_arm],
 			)
-		)
-	);
+		},
+		ScannerScan => {
+			// A scanner doesn't use all the match setup; we already have a cursor!
+			debug!("make_scan_expr - building passthru expr");
+			/*quote_expr!(cx, {
+				let cur = $input_expr;
+				let mut result: rt::Result<_, rt::ScanError>;
 
-	debug!("make_scan_expr - building match expr");
-	let match_expr = cx.expr_match(DUMMY_SP,
-		input_expr,
-		vec![err_arm, ok_arm],
-	);
+				$scan_arm_stmts
+
+				result
+			})*/
+			cx.expr_block(
+				cx.block(DUMMY_SP,
+					vec![
+						cx.stmt_let(DUMMY_SP,
+							/*mutabl:*/false, cx.ident_of("cur"),
+							input_expr
+						),
+						quote_stmt!(cx, let mut result: rt::Result<_, rt::ScanError>;),
+					] + scan_arm_stmts,
+					Some(quote_expr!(cx, result))
+				)
+			)
+		},
+	};
 
 	debug!("make_scan_expr - building block expr");
 	/*let expr = quote_expr!(cx, {
@@ -236,86 +300,180 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 	expr
 }
 
-fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool) -> P<ast::Stmt> {
-	debug!("gen_arm_stmt(cx, {}, {})", arm, is_first);
+fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, scan_kind: ScanKind) -> P<ast::Stmt> {
+	debug!("gen_arm_stmt(cx, {}, {}, {})", arm, is_first, scan_kind);
 	let (arm_pat, arm_expr) = arm;
 
-	// We need to wrap arm_expr in a block and a partially constrained Ok.  If we don't wrap it in a block, `break` won't work---the compiler will complain about an unconstrained type.
-	/*let arm_expr = quote_expr!(cx, rt::Ok::<_, rt::ScanError>({ $arm_expr }));*/
-	let arm_expr = cx.expr_call(DUMMY_SP,
-		quote_expr!(cx, rt::Ok::<_, rt::ScanError>),
-		vec![
-			cx.expr_block(cx.block_expr(arm_expr)),
-		]
-	);
+	let arm_expr = match scan_kind {
+		NormalScan => {
+			// We need to wrap arm_expr in a block and a partially constrained Ok.  If we don't wrap it in a block, `break` won't work---the compiler will complain about an unconstrained type.
+			/*let arm_expr = quote_expr!(cx, rt::Ok::<_, rt::ScanError>({ $arm_expr }));*/
+			cx.expr_call(DUMMY_SP,
+				quote_expr!(cx, rt::Ok::<_, rt::ScanError>),
+				vec![
+					cx.expr_block(cx.block_expr(arm_expr)),
+				]
+			)
+		},
+		ScannerScan => {
+			// We need to do more or less the same as with NormalScan *except* that we also want to bundle the cursor in with the result.
+			/*let arm_expr = quote_expr!(cx, rt::Ok::<_, rt::ScanError>(({ $arm_expr }, cur)));*/
+			cx.expr_call(DUMMY_SP,
+				quote_expr!(cx, rt::Ok::<_, rt::ScanError>),
+				vec![
+					cx.expr_tuple(DUMMY_SP,
+						vec![
+							cx.expr_block(cx.block_expr(arm_expr)),
+							quote_expr!(cx, cur),
+						]
+					),
+				]
+			)
+		}
+	};
 
 	let (cur_stmt, arm_expr) = match arm_pat {
 		PatternArm(pattern, tail, attrs) => {
-			let tok = cx.expr_path(cx.path(DUMMY_SP,
-				attrs.inp_tok.as_slice().split_str("::").map(|s| cx.ident_of(s)).collect()
-			));
-			let sp = quote_expr!(cx, rt::whitespace::Ignore);
-			let cur_stmt = quote_stmt!(cx,
-				let cur = rt::Cursor::new(_input, $tok, $sp);
-			);
+			let cur_stmt = match scan_kind {
+				NormalScan => {
+					let tok = cx.expr_path(cx.path(DUMMY_SP,
+						attrs.inp_tok.as_slice().split_str("::").map(|s| cx.ident_of(s)).collect()
+					));
+					let sp = quote_expr!(cx, rt::whitespace::Ignore);
+					let cur_stmt = quote_stmt!(cx,
+						let cur = rt::Cursor::new(_input, $tok, $sp);
+					);
+					Some(cur_stmt)
+				},
+				ScannerScan => {
+					Some(quote_stmt!(cx, let cur = cur.clone();))
+				},
+			};
 			let and_then = match tail {
 				None => {
-					/*quote_expr!(cx, {
-						match cur.expect_eof() {
-							rt::Err(err) => rt::Err(err),
-							rt::Ok(()) => $arm_expr
-						}
-					})*/
-					cx.expr_match(DUMMY_SP,
-						quote_expr!(cx, cur.expect_eof()),
-						vec![
-							cx.arm(DUMMY_SP,
-								vec![quote_pat!(cx, rt::Err(err))],
-								quote_expr!(cx, rt::Err(err))
-							),
-							cx.arm(DUMMY_SP,
-								vec![quote_pat!(cx, rt::Ok(()))],
-								arm_expr
+					match scan_kind {
+						NormalScan => {
+							/*quote_expr!(cx, {
+								match cur.expect_eof() {
+									rt::Err(err) => rt::Err(err),
+									rt::Ok(()) => $arm_expr
+								}
+							})*/
+							cx.expr_match(DUMMY_SP,
+								quote_expr!(cx, cur.expect_eof()),
+								vec![
+									cx.arm(DUMMY_SP,
+										vec![quote_pat!(cx, rt::Err(err))],
+										quote_expr!(cx, rt::Err(err))
+									),
+									cx.arm(DUMMY_SP,
+										vec![quote_pat!(cx, rt::Ok(()))],
+										arm_expr
+									)
+								]
 							)
-						]
-					)
+						},
+						ScannerScan => {
+							/*quote_expr!(cx, {
+								$arm_expr
+							})*/
+							arm_expr
+						},
+					}
 				},
 				Some(ident) => {
+					match scan_kind {
+						NormalScan => {
+							/*quote_expr!(cx, {
+								let $ident = cur.tail_str();
+								$arm_expr
+							})*/
+							cx.expr_block(
+								cx.block(DUMMY_SP,
+									vec![
+										cx.stmt_let(
+											ident.span, /*mutbl:*/false, ident.node,
+											quote_expr!(cx, cur.tail_str())
+										),
+									],
+									Some(arm_expr)
+								)
+							)
+						},
+						ScannerScan => {
+							/*quote_expr!(cx, {
+								let tail_str = cur.tail_str();
+								let $ident = tail_str;
+								let cur = cur.slice_from(tail_str.len());
+								$arm_expr
+							})*/
+							cx.expr_block(
+								cx.block(DUMMY_SP,
+									vec![
+										quote_stmt!(cx, let tail_str = cur.tail_str();),
+										cx.stmt_let(
+											ident.span, /*mutabl:*/false, ident.node,
+											quote_expr!(cx, tail_str)
+										),
+										quote_stmt!(cx, let cur = cur.slice_from(tail_str.len());),
+									],
+									Some(arm_expr)
+								)
+							)
+						},
+					}
+				}
+			};
+			(cur_stmt, gen_ast_scan_expr(cx, &attrs, pattern, and_then))
+		},
+		FallbackArm(None) => {
+			match scan_kind {
+				NormalScan => {
+					(None, arm_expr)
+				},
+				ScannerScan => {
+					(None, cx.expr_tuple(DUMMY_SP,
+						vec![
+							arm_expr,
+							quote_expr!(cx, cur)
+						]
+					))
+				},
+			}
+		},
+		FallbackArm(Some(ident)) => {
+			match scan_kind {
+				NormalScan => {
 					/*quote_expr!(cx, {
-						let $ident = cur.tail_str();
+						let $ident = _input;
 						$arm_expr
 					})*/
-					cx.expr_block(
+					(None, cx.expr_block(
 						cx.block(DUMMY_SP,
 							vec![
-								cx.stmt_let(
-									ident.span, /*mutbl:*/false, ident.node,
-									quote_expr!(cx, cur.tail_str())
-								),
+								cx.stmt_let(ident.span, /*mutbl:*/false, ident.node, quote_expr!(cx, _input)),
 							],
 							Some(arm_expr)
 						)
-					)
-				}
-			};
-			(Some(cur_stmt), gen_ast_scan_expr(cx, &attrs, pattern, and_then))
-		},
-		FallbackArm(None) => {
-			(None, arm_expr)
-		},
-		FallbackArm(Some(ident)) => {
-			/*quote_expr!(cx, {
-				let $ident = _input;
-				$arm_expr
-			})*/
-			(None, cx.expr_block(
-				cx.block(DUMMY_SP,
-					vec![
-						cx.stmt_let(ident.span, /*mutbl:*/false, ident.node, quote_expr!(cx, _input)),
-					],
-					Some(arm_expr)
-				)
-			))
+					))
+				},
+				ScannerScan => {
+					/*quote_expr!(cx, {
+						let $ident = _input;
+						let cur = cur.slice_from(_input.len())
+						$arm_expr
+					})*/
+					(None, cx.expr_block(
+						cx.block(DUMMY_SP,
+							vec![
+								cx.stmt_let(ident.span, /*mutbl:*/false, ident.node, quote_expr!(cx, _input)),
+								quote_stmt!(cx, let cur = cur.slice_from(_input.len());),
+							],
+							Some(arm_expr)
+						)
+					))
+				},
+			}
 		},
 	};
 
