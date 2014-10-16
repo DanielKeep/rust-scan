@@ -624,8 +624,8 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 						}
 					});
 
-					// Every result starts with the cursor.
-					let cur_iter = Some(quote_expr!(cx, cur)).into_iter();
+					// Every result starts with the cursor.  Note that we're cloning the cursor here to get around not being able to move outer variables captured by reference.
+					let cur_iter = Some(quote_expr!(cx, cur.clone())).into_iter();
 
 					// Turn it into a tuple expr, wrap in an Ok.
 					cx.expr_ok(DUMMY_SP,
