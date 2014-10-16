@@ -342,11 +342,11 @@ mod scan_pattern {
 		match p.token {
 			token::LIT_STR(ident) => {
 				p.bump();
-				Some(AstText(ident.as_str().into_string()))
+				Some(AstText(::syntax::parse::str_lit(ident.as_str())))
 			},
 			token::LIT_STR_RAW(ident, _) => {
 				p.bump();
-				Some(AstText(ident.as_str().into_string()))
+				Some(AstText(::syntax::parse::raw_str_lit(ident.as_str())))
 			},
 			_ => None
 		}
