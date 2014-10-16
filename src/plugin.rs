@@ -593,7 +593,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 }
 
 fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then: P<ast::Expr>) -> P<ast::Expr> {
-	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition, RepeatRange};
+	use parse::{AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition, RepeatRange};
 	debug!("gen_ast_scan_expr(cx, {}, {}, {})", attrs, node, and_then);
 
 	let captures = enumerate_captures(&node);
@@ -809,6 +809,43 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 			}
 
 			and_then
+		},
+		AstRegex(re) => {
+			let re_lit = str_to_expr(cx, re.as_slice());
+			let ex_lit = str_to_expr(cx, format!("a match for /{}/", re));
+
+			/*quote_expr!(cx, {
+				let cur = cur.pop_ws();
+				match (regex!($re)).find(cur.tail_str()) {
+					rt::Some((0, end)) => {
+						let cur = cur.slice_from(end);
+						$and_then
+					},
+					rt::Some(..) | rt::None => rt::Err(cur.expected(format!("a match for /{}/", $re).as_slice()))
+				}
+			})*/
+			cx.expr_block(cx.block(DUMMY_SP,
+				vec![
+					quote_stmt!(cx, let cur = cur.pop_ws();),
+				],
+				Some(cx.expr_match(DUMMY_SP,
+					quote_expr!(cx, (regex!($re_lit)).find(cur.tail_str())),
+					vec![
+						cx.arm(DUMMY_SP,
+							vec![
+								quote_pat!(cx, rt::Some((0, end))),
+							],
+							cx.expr_block(cx.block(DUMMY_SP,
+								vec![
+									quote_stmt!(cx, let cur = cur.slice_from(end);),
+								],
+								Some(and_then)
+							))
+						),
+						quote_arm!(cx, rt::Some(..) | rt::None => rt::Err(cur.expected($ex_lit)),),
+					]
+				))
+			))
 		},
 		AstOptional(box node) => {
 			// Desugars into ($node|).
@@ -1251,7 +1288,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 type CaptureMap = TreeMap<ast::Ident, (codemap::Span, Option<P<ast::Ty>>)>;
 
 fn enumerate_captures(node: &PatAst) -> CaptureMap {
-	use parse::{AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
+	use parse::{AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
 	debug!("enumerate_captures(&{})", node);
 
 	fn merge(mut lhs: CaptureMap, rhs: CaptureMap) -> CaptureMap {
@@ -1264,7 +1301,7 @@ fn enumerate_captures(node: &PatAst) -> CaptureMap {
 		&AstAlternates(ref nodes) | &AstSequence(ref nodes) => {
 			nodes.iter().map(enumerate_captures).fold(TreeMap::new(), |a,b| merge(a,b))
 		},
-		&AstText(_) => {
+		&AstText(..) | &AstRegex(..) => {
 			TreeMap::new()
 		},
 		&AstOptional(ref node) => {

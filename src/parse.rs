@@ -12,11 +12,15 @@
 
 	<sequence-atom> := <maybe-capture> | <non-capture-atom>
 
-	<non-capture-atom> := <maybe-text> | <maybe-group> | <repetition>
+	<non-capture-atom> := <maybe-text> | <maybe-regex> | <maybe-group> | <repetition>
 
 	<maybe-text> := <text> "?"?
 
 	<text> := <string_literal> | <raw_string_literal>
+
+	<maybe-regex> := <regex> "?"?
+
+	<regex> := "/" <text>
 
 	<maybe-capture> := <capture> "?"?
 
@@ -82,7 +86,7 @@ use syntax::parse::parser::Parser;
 use syntax::parse::token;
 use syntax::ptr::P;
 
-pub use self::scan_pattern::{PatAst, AstAlternates, AstSequence, AstText, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
+pub use self::scan_pattern::{PatAst, AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
 pub use self::scan_pattern::RepeatRange;
 
 #[deriving(Show)]
@@ -248,6 +252,7 @@ mod scan_pattern {
 		AstAlternates(Vec<PatAst>),
 		AstSequence(Vec<PatAst>),
 		AstText(String),
+		AstRegex(String),
 		AstOptional(Box<PatAst>),
 		AstCapture(Spanned<ast::Ident>, Option<P<ast::Ty>>),
 		AstSliceCapture(Spanned<ast::Ident>, Box<PatAst>),
@@ -306,7 +311,7 @@ mod scan_pattern {
 			.or_else(|| try_parse_non_capture_atom(cx, p))
 	}
 
-	// <non-capture-atom> := <maybe-text> | <maybe-group> | <repetition>
+	// <non-capture-atom> := <maybe-text> | <maybe-regex> | <maybe-group> | <repetition>
 	fn parse_non_capture_atom(cx: &mut ExtCtxt, p: &mut Parser) -> PatAst {
 		debug!("parse_non_capture_atom(cx, p @ {})", p.token);
 		if let Some(ast) = try_parse_non_capture_atom(cx, p) {
@@ -319,6 +324,7 @@ mod scan_pattern {
 	fn try_parse_non_capture_atom(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_non_capture_atom(cx, p @ {})", p.token);
 		try_parse_maybe_text(cx, p)
+			.or_else(|| try_parse_maybe_regex(cx, p))
 			.or_else(|| try_parse_maybe_group(cx, p))
 			.or_else(|| try_parse_repetition(cx, p))
 	}
@@ -337,18 +343,48 @@ mod scan_pattern {
 	}
 
 	// <text> := <string_literal> | <raw_string_literal>
-	fn try_parse_text(_: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
+	fn try_parse_text(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_text(cx, p @ {})", p.token);
+		try_parse_str_lit(cx, p).map(|s| AstText(s))
+	}
+
+	fn try_parse_str_lit(_: &mut ExtCtxt, p: &mut Parser) -> Option<String> {
 		match p.token {
 			token::LIT_STR(ident) => {
 				p.bump();
-				Some(AstText(::syntax::parse::str_lit(ident.as_str())))
+				Some(::syntax::parse::str_lit(ident.as_str()))
 			},
 			token::LIT_STR_RAW(ident, _) => {
 				p.bump();
-				Some(AstText(::syntax::parse::raw_str_lit(ident.as_str())))
+				Some(::syntax::parse::raw_str_lit(ident.as_str()))
 			},
 			_ => None
+		}
+	}
+
+	// <maybe-regex> := <regex> "?"?
+	fn try_parse_maybe_regex(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
+		debug!("try_parse_maybe_regex(cx, p @ {})", p.token);
+		try_parse_regex(cx, p)
+			.and_then(|node| {
+				if p.eat(&token::QUESTION) {
+					Some(AstOptional(box node))
+				} else {
+					Some(node)
+				}
+			})
+	}
+
+	// <regex> := "/" <text>
+	fn try_parse_regex(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
+		debug!("try_parse_regex(cx, p @ {})", p.token);
+		if p.eat(&token::BINOP(token::SLASH)) {
+			match try_parse_str_lit(cx, p) {
+				Some(s) => Some(AstRegex(s)),
+				None => p.fatal("expected string literal")
+			}
+		} else {
+			None
 		}
 	}
 
