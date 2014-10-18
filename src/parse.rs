@@ -307,8 +307,9 @@ mod scan_pattern {
 				},
 				&AstCapture(ref ident, ref m_ty) => {
 					try!(write!(f, "{}", ident.node));
-					if let Some(ref ty) = *m_ty {
-						try!(write!(f, ":{}", **ty));
+					if let Some(_) = *m_ty {
+						// TODO: `{}` on a type is too verbose to be useful.
+						try!(write!(f, ":$ty"));
 					}
 				},
 				&AstSliceCapture(ref ident, ref node) => {
