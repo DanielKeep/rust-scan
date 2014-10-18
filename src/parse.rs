@@ -190,9 +190,10 @@ fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser, attrs: ScanArmAttrs) -> 
 
 	// This *might* be a fallback pattern.
 	if p.token == token::UNDERSCORE {
-		p.bump();
-		p.expect(&token::FAT_ARROW);
-		return FallbackArm(None)
+		// ISSUE #15: currently, `_ => ()` is an anonymous fallback arm.  After a little while, change it so that it does an anonymous capture of a single *token*, rather than the whole line.
+		if p.look_ahead(1, |t| *t == token::FAT_ARROW) {
+			p.fatal("in the future, a lone `_` will be an anonymous token capture; use `.._` instead.");
+		}
 	} else if p.token == token::DOTDOT {
 		p.bump();
 		let ident = parse_fallback_ident(cx, p);
@@ -490,6 +491,11 @@ mod scan_pattern {
 				let sp = p.span;
 				p.bump();
 				respan(sp, ident)
+			},
+			token::UNDERSCORE => {
+				let sp = p.span;
+				p.bump();
+				respan(sp, cx.ident_of("_"))
 			},
 			_ => return None
 		};

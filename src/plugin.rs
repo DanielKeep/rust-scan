@@ -916,7 +916,11 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 				match rt::Scanner::scan(&cur.pop_ws()) {
 					Err(err) => Err(err),
 					Ok((val, cur)) => {
-						let $ident: $ty = val;
+						${
+							if ident != "_" {
+								${let $ident: $ty = val;}
+							}
+						}
 
 						$and_then
 					}
@@ -943,18 +947,19 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 									/*quote_stmt!(cx,
 										let $ident: $ty = val;
 									),*/
-									match ty {
-										None => cx.stmt_let(ident.span,
+									match (ident.node.as_str() != "_", ty) {
+										(_, None) => cx.stmt_let(ident.span,
 											/*mutbl:*/false,
 											ident.node,
 											quote_expr!(cx, val)
 										),
-										Some(ty) => cx.stmt_let_typed(ident.span,
+										(_, Some(ty)) => cx.stmt_let_typed(ident.span,
 											/*mutbl:*/false,
 											ident.node,
 											ty,
 											quote_expr!(cx, val)
-										)
+										),
+										//(false, _) => quote_stmt!(cx, let _ = ();)
 									},
 								],
 								Some(and_then)
@@ -969,86 +974,91 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 		AstSliceCapture(ident, box node) => {
 			// This is a bit like a cross between a single-branch alternate and a repetition.  We have similar capture-return behaviour to the former, similar sub-pattern scanning to the latter.
 
-			// Get list of captures in the sub-pattern.
-			let node_captures = enumerate_captures(&node);
+			if ident.node.as_str() == "_" {
+				// Completely ignore all this if the ident is `_`.
+				gen_ast_scan_expr(cx, attrs, node, and_then)
+			} else {
+				// Get list of captures in the sub-pattern.
+				let node_captures = enumerate_captures(&node);
 
-			// We use this to pass back the scanned capture's cursor and sub-captures.
-			/*let node_and_then = quote_expr!(cx, {
-				(cur $(, $node_captures)*)
-			});*/
-			let node_and_then = cx.expr_ok(DUMMY_SP,
-				cx.expr_tuple(DUMMY_SP,
-					Some(quote_expr!(cx, cur)).into_iter()
+				// We use this to pass back the scanned capture's cursor and sub-captures.
+				/*let node_and_then = quote_expr!(cx, {
+					(cur $(, $node_captures)*)
+				});*/
+				let node_and_then = cx.expr_ok(DUMMY_SP,
+					cx.expr_tuple(DUMMY_SP,
+						Some(quote_expr!(cx, cur)).into_iter()
+							.chain(
+								node_captures.iter().map(|(&ident, &(sp, _))| {
+									cx.expr_ident(sp, ident)
+								})
+							)
+							.collect()
+					)
+				);
+
+				// Build the expression to scan the sub-pattern.
+				let node_expr = gen_ast_scan_expr(cx, attrs, node, node_and_then);
+
+				// Build the capture pattern.
+				/*let capture_pattern = quote_pat!(cx,
+					(cur $(, $node_captures)*)
+				);*/
+				let capture_pattern = cx.pat_tuple(DUMMY_SP,
+					Some(quote_pat!(cx, cur)).into_iter()
 						.chain(
-							node_captures.iter().map(|(&ident, &(sp, _))| {
-								cx.expr_ident(sp, ident)
+							node_captures.keys().map(|&ident| {
+								cx.pat_ident(DUMMY_SP, ident)
 							})
 						)
 						.collect()
-				)
-			);
+				);
 
-			// Build the expression to scan the sub-pattern.
-			let node_expr = gen_ast_scan_expr(cx, attrs, node, node_and_then);
-
-			// Build the capture pattern.
-			/*let capture_pattern = quote_pat!(cx,
-				(cur $(, $node_captures)*)
-			);*/
-			let capture_pattern = cx.pat_tuple(DUMMY_SP,
-				Some(quote_pat!(cx, cur)).into_iter()
-					.chain(
-						node_captures.keys().map(|&ident| {
-							cx.pat_ident(DUMMY_SP, ident)
-						})
-					)
-					.collect()
-			);
-
-			/*quote_expr!(cx {
-				let start_cur = cur.pop_ws();
-				match $node_expr {
-					Err(err) => Err(err),
-					Ok($capture_pattern) => {
-						let $ident = start_cur.str_slice_to_cur(&cur);
-						$and_then
+				/*quote_expr!(cx {
+					let start_cur = cur.pop_ws();
+					match $node_expr {
+						Err(err) => Err(err),
+						Ok($capture_pattern) => {
+							let $ident = start_cur.str_slice_to_cur(&cur);
+							$and_then
+						}
 					}
-				}
-			})*/
-			cx.expr_block(
-				cx.block(DUMMY_SP,
-					vec![
-						quote_stmt!(cx, let start_cur = cur.pop_ws();),
-					],
-					Some(cx.expr_match(DUMMY_SP,
-						node_expr,
+				})*/
+				cx.expr_block(
+					cx.block(DUMMY_SP,
 						vec![
-							{
-								let trace_stmt = attrs.trace.map(|| quote_stmt!(cx,
-									debug!("did not match {:s}", err);));
-								quote_arm!(cx, Err(err) => { $trace_stmt Err(err) },)
-							},
-							cx.arm(DUMMY_SP,
-								vec![
-									cx.pat_ok(DUMMY_SP, capture_pattern),
-								],
-								cx.expr_block(cx.block(DUMMY_SP,
+							quote_stmt!(cx, let start_cur = cur.pop_ws();),
+						],
+						Some(cx.expr_match(DUMMY_SP,
+							node_expr,
+							vec![
+								{
+									let trace_stmt = attrs.trace.map(|| quote_stmt!(cx,
+										debug!("did not match {:s}", err);));
+									quote_arm!(cx, Err(err) => { $trace_stmt Err(err) },)
+								},
+								cx.arm(DUMMY_SP,
 									vec![
-										/*quote_stmt!(cx, let $ident = start_cur.str_slice_to_cur(&cur);),*/
-										cx.stmt_let(ident.span,
-											/*mutbl:*/false, ident.node,
-											quote_expr!(cx, start_cur.str_slice_to_cur(&cur))
-										),
+										cx.pat_ok(DUMMY_SP, capture_pattern),
 									],
-									Some(and_then.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
-										|| quote_stmt!(cx, debug!("matched");)))
-								))
-							)
-						]
-					))
-				)
-			).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
-				|| quote_stmt!(cx, debug!("try {}", $node_str);))
+									cx.expr_block(cx.block(DUMMY_SP,
+										vec![
+											/*quote_stmt!(cx, let $ident = start_cur.str_slice_to_cur(&cur);),*/
+											cx.stmt_let(ident.span,
+												/*mutbl:*/false, ident.node,
+												quote_expr!(cx, start_cur.str_slice_to_cur(&cur))
+											),
+										],
+										Some(and_then.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+											|| quote_stmt!(cx, debug!("matched");)))
+									))
+								)
+							]
+						))
+					)
+				).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+					|| quote_stmt!(cx, debug!("try {}", $node_str);))
+			}
 		},
 		AstLookahead(box node) => {
 			let node_captures = enumerate_captures(&node);
@@ -1393,12 +1403,18 @@ fn enumerate_captures(node: &PatAst) -> CaptureMap {
 		},
 		&AstCapture(ident, ref ty) => {
 			let mut set = TreeMap::new();
-			set.insert(ident.node, (ident.span, ty.clone()));
+			// Ignore "_" as a capture.
+			if ident.node.as_str() != "_" {
+				set.insert(ident.node, (ident.span, ty.clone()));
+			}
 			set
 		},
 		&AstSliceCapture(ident, ref node) => {
 			let mut captures = enumerate_captures(&**node);
-			captures.insert(ident.node, (ident.span, None));
+			// Ignore "_" as a capture.
+			if ident.node.as_str() != "_" {
+				captures.insert(ident.node, (ident.span, None));
+			}
 			captures
 		},
 		&AstLookahead(ref node) => {

@@ -6,5 +6,5 @@ extern crate scan_util;
 
 #[test]
 fn test_scan_unused() {
-	let _ = scan! { "x", _ => () };
+	let _ = scan! { "x", _:&str => () };
 }
