@@ -5,12 +5,14 @@ use syntax::codemap;
 use syntax::codemap::DUMMY_SP;
 use syntax::ext::build::AstBuilder;
 use syntax::ext::base::{ExtCtxt, MacExpr, MacItems, MacResult};
+use syntax::ext::quote::rt::ToTokens;
 use syntax::parse::parser::Parser;
 use syntax::parse::token;
 use syntax::ptr::P;
 
+use util::BoolMap;
 use parse::parse_scan_arm;
-use parse::{ScanArm, FallbackArm, PatternArm, ScanAttrs};
+use parse::{ScanArm, FallbackArm, PatternArm, ScanArmAttrs};
 use parse::PatAst;
 
 use scan_util::{Tokenizer, Whitespace};
@@ -350,8 +352,13 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 		}
 	};
 
-	let (cur_stmt, arm_expr) = match arm_pat {
+	let (arm_trace_msg, cur_stmt, arm_expr) = match arm_pat {
 		PatternArm(pattern, tail, attrs) => {
+			let arm_trace_msg = if attrs.trace {
+				Some(format!("matching against pattern {:s}", pattern))
+			} else {
+				None
+			};
 			let cur_stmt = match scan_kind {
 				NormalScan => {
 					let tok = cx.expr_path(cx.path(DUMMY_SP,
@@ -442,15 +449,15 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 					}
 				}
 			};
-			(cur_stmt, gen_ast_scan_expr(cx, &attrs, pattern, and_then))
+			(arm_trace_msg, cur_stmt, gen_ast_scan_expr(cx, &attrs, pattern, and_then))
 		},
 		FallbackArm(None) => {
 			match scan_kind {
 				NormalScan => {
-					(None, arm_expr)
+					(None, None, arm_expr)
 				},
 				ScannerScan => {
-					(None, cx.expr_tuple(DUMMY_SP,
+					(None, None, cx.expr_tuple(DUMMY_SP,
 						vec![
 							arm_expr,
 							quote_expr!(cx, cur)
@@ -466,7 +473,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 						let $ident = _input;
 						$arm_expr
 					})*/
-					(None, cx.expr_block(
+					(None, None, cx.expr_block(
 						cx.block(DUMMY_SP,
 							vec![
 								cx.stmt_let(ident.span, /*mutbl:*/false, ident.node, quote_expr!(cx, _input)),
@@ -481,7 +488,7 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 						let cur = cur.slice_from(_input.len())
 						$arm_expr
 					})*/
-					(None, cx.expr_block(
+					(None, None, cx.expr_block(
 						cx.block(DUMMY_SP,
 							vec![
 								cx.stmt_let(ident.span, /*mutbl:*/false, ident.node, quote_expr!(cx, _input)),
@@ -495,9 +502,16 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 		},
 	};
 
+	let arm_trace_stmt = arm_trace_msg.map(|msg| {
+		let msg = msg.as_slice();
+		quote_stmt!(cx, debug!("{}", $msg);)
+	});
+
 	// Merge cur_stmt and arm_expr into a block.
 	let arm_expr = cx.expr_block(cx.block(DUMMY_SP,
-		cur_stmt.into_iter().collect(),
+		arm_trace_stmt.into_iter()
+			.chain(cur_stmt.into_iter())
+			.collect(),
 		Some(arm_expr)
 	));
 
@@ -592,11 +606,13 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 	}
 }
 
-fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then: P<ast::Expr>) -> P<ast::Expr> {
+fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_then: P<ast::Expr>) -> P<ast::Expr> {
 	use parse::{AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition, RepeatRange};
 	debug!("gen_ast_scan_expr(cx, {}, {}, {})", attrs, node, and_then);
 
 	let captures = enumerate_captures(&node);
+
+	let node_str = format!("{:s}", node);
 
 	match node {
 		AstAlternates(nodes) => {
@@ -628,13 +644,39 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 					let cur_iter = Some(quote_expr!(cx, cur.clone())).into_iter();
 
 					// Turn it into a tuple expr, wrap in an Ok.
-					cx.expr_ok(DUMMY_SP,
+					let result_expr = cx.expr_ok(DUMMY_SP,
 						cx.expr_tuple(DUMMY_SP, cur_iter.chain(alt_results).collect())
-					)
+					);
+
+					if attrs.trace {
+						let msg = format!("alt branch {:s} matched", node);
+						let msg = msg.as_slice();
+						quote_expr!(cx, {
+							debug!($msg);
+							$result_expr
+						})
+					} else {
+						result_expr
+					}
 				};
 
+				let trace_msg = format!("trying alt branch {:s}", node);
+
 				// Now generate the match expr.
-				gen_ast_scan_expr(cx, attrs, node, alt_and_then)
+				let alt_expr = gen_ast_scan_expr(cx, attrs, node, alt_and_then);
+
+				if attrs.trace {
+					let msg = trace_msg; //format!("trying alt branch {}", node);
+					let msg = msg.as_slice();
+					cx.expr_block(cx.block(DUMMY_SP,
+						vec![
+							quote_stmt!(cx, debug!($msg);),
+						],
+						Some(alt_expr)
+					))
+				} else {
+					alt_expr
+				}
 			}).collect();
 
 			// We now need to turn the vector of `Expr`s into a chain of `or_else` calls.
@@ -677,34 +719,40 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 					Ok($capture_pattern) => $and_then
 				}
 			})*/
-			cx.expr_match(DUMMY_SP,
-				alt_branches,
-				vec![
-					cx.arm(DUMMY_SP,
-						vec![quote_pat!(cx, rt::Err(err))],
-						quote_expr!(cx, rt::Err(err))
-					),
-					cx.arm(DUMMY_SP,
-						vec![
-							cx.pat_enum(DUMMY_SP,
-								cx.path(DUMMY_SP,
-									vec![
-										cx.ident_of("rt"),
-										cx.ident_of("Ok"),
-									]
-								),
-								vec![capture_pattern]
-							)
-						],
-						and_then
-					),
-				]
-			)
+			{
+				let expr = cx.expr_match(DUMMY_SP,
+					alt_branches,
+					vec![
+						cx.arm(DUMMY_SP,
+							vec![quote_pat!(cx, rt::Err(err))],
+							quote_expr!(cx, rt::Err(err))
+						),
+						cx.arm(DUMMY_SP,
+							vec![
+								cx.pat_enum(DUMMY_SP,
+									cx.path(DUMMY_SP,
+										vec![
+											cx.ident_of("rt"),
+											cx.ident_of("Ok"),
+										]
+									),
+									vec![capture_pattern]
+								)
+							],
+							and_then
+						),
+					]
+				);
+				expr.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+					|| quote_stmt!(cx, debug!("try {}", $node_str);))
+			}
 		},
 		AstSequence(nodes) => {
 			// We need to do this *backwards* because in order to generate the AST for a node, we need to have the and_then AST.
 			nodes.into_iter().rev()
 				.fold(and_then, |and_then, node| gen_ast_scan_expr(cx, attrs, node, and_then))
+				.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+					|| quote_stmt!(cx, debug!("try {}", $node_str);))
 		},
 		AstText(s) => {
 			use parse::{WordsAndInts, IdentsAndInts, SpaceDelimited, ExplicitTok};
@@ -764,7 +812,8 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 											]
 										),
 									],
-									/*expr:*/cx.expr_call(DUMMY_SP,
+									/*expr:*/
+									cx.expr_call(DUMMY_SP,
 										cx.expr_path(
 											cx.path(DUMMY_SP,
 												vec![
@@ -782,7 +831,8 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 												)
 											),	
 										]
-									)
+									).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+										|| quote_stmt!(cx, debug!("did not match {:s}", err);))
 								),
 								cx.arm(DUMMY_SP,
 									/*pats:*/vec![
@@ -800,7 +850,8 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 											]
 										),
 									],
-									/*expr:*/and_then
+									/*expr:*/and_then.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+										|| quote_stmt!(cx, debug!("matched");))
 								)
 							]
 						)
@@ -808,12 +859,15 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 				);
 			}
 
-			and_then
+			and_then.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+				|| quote_stmt!(cx, debug!("try {}", $node_str);))
 		},
 		AstRegex(re) => {
-			let re_lit = str_to_expr(cx, re.as_slice());
-			let ex_lit = str_to_expr(cx, format!("a match for /{}/", re));
-
+			let err_trace = if attrs.trace {
+				Some(quote_stmt!(cx, debug!("did not match {:s}", err);))
+			} else {
+				None
+			};
 			/*quote_expr!(cx, {
 				let cur = cur.pop_ws();
 				match (regex!($re)).find(cur.tail_str()) {
@@ -829,7 +883,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 					quote_stmt!(cx, let cur = cur.pop_ws();),
 				],
 				Some(cx.expr_match(DUMMY_SP,
-					quote_expr!(cx, (regex!($re_lit)).find(cur.tail_str())),
+					quote_expr!(cx, (regex!($re)).find(cur.tail_str())),
 					vec![
 						cx.arm(DUMMY_SP,
 							vec![
@@ -842,10 +896,15 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 								Some(and_then)
 							))
 						),
-						quote_arm!(cx, rt::Some(..) | rt::None => rt::Err(cur.expected($ex_lit)),),
+						quote_arm!(cx, rt::Some(..) | rt::None => {
+							let err = cur.expected(format!("a match for /{}/", $re).as_slice());
+							$err_trace
+							rt::Err(err)
+						},),
 					]
 				))
-			))
+			)).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+				|| quote_stmt!(cx, debug!("try {}", $node_str);))
 		},
 		AstOptional(box node) => {
 			// Desugars into ($node|).
@@ -866,7 +925,14 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 			cx.expr_match(DUMMY_SP,
 				quote_expr!(cx, rt::Scanner::scan(&cur.pop_ws())),
 				vec![
-					quote_arm!(cx, rt::Err(err) => rt::Err(err),),
+					{
+						let trace_stmt = if attrs.trace {
+							Some(quote_stmt!(cx, debug!("did not match {:s}", err);))
+						} else {
+							None
+						};
+						quote_arm!(cx, rt::Err(err) => { $trace_stmt rt::Err(err) },)
+					},
 					cx.arm(DUMMY_SP,
 						vec![
 							quote_pat!(cx, rt::Ok((val, cur))),
@@ -893,10 +959,12 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 								],
 								Some(and_then)
 							)
-						)
+						).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+							|| quote_stmt!(cx, debug!("matched");))
 					)
 				]
-			)
+			).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+				|| quote_stmt!(cx, format!("try {}", $node_str);))
 		},
 		AstSliceCapture(ident, box node) => {
 			// This is a bit like a cross between a single-branch alternate and a repetition.  We have similar capture-return behaviour to the former, similar sub-pattern scanning to the latter.
@@ -955,7 +1023,11 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 					Some(cx.expr_match(DUMMY_SP,
 						node_expr,
 						vec![
-							quote_arm!(cx, Err(err) => Err(err),),
+							{
+								let trace_stmt = attrs.trace.map(|| quote_stmt!(cx,
+									debug!("did not match {:s}", err);));
+								quote_arm!(cx, Err(err) => { $trace_stmt Err(err) },)
+							},
 							cx.arm(DUMMY_SP,
 								vec![
 									cx.pat_ok(DUMMY_SP, capture_pattern),
@@ -968,13 +1040,15 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 											quote_expr!(cx, start_cur.str_slice_to_cur(&cur))
 										),
 									],
-									Some(and_then)
+									Some(and_then.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+										|| quote_stmt!(cx, debug!("matched");)))
 								))
 							)
 						]
 					))
 				)
-			)
+			).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+				|| quote_stmt!(cx, debug!("try {}", $node_str);))
 		},
 		AstLookahead(box node) => {
 			let node_captures = enumerate_captures(&node);
@@ -999,13 +1073,18 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 						vec![
 							cx.pat_err(DUMMY_SP, quote_pat!(cx, _)),
 						],
-						and_then
+						and_then.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+							|| quote_stmt!(cx, debug!("negative lookahead passed");))
 					),
-					quote_arm!(cx,
-						rt::Ok(_) => rt::Err(cur.expected("negative lookahead to fail")),
-					)
+					{
+						let trace_stmt = attrs.trace.map(|| quote_stmt!(cx, debug!("negative lookahead failed");));
+						quote_arm!(cx,
+							rt::Ok(_) => { $trace_stmt rt::Err(cur.expected("negative lookahead to fail")) },
+						)
+					},
 				]
-			)
+			).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+				|| quote_stmt!(cx, debug!("try {}", $node_str);))
 		},
 		AstRepetition { node, sep, range } => {
 			let node_captures = enumerate_captures(&*node);
@@ -1271,15 +1350,20 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanAttrs, node: PatAst, and_then
 			cx.expr_match(DUMMY_SP,
 				rep_scan,
 				vec![
-					quote_arm!(cx, Err(err) => Err(err),),
+					{
+						let trace_stmt = attrs.trace.map(|| quote_stmt!(cx, debug!("did not match {:s}", err);));
+						quote_arm!(cx, Err(err) => { $trace_stmt Err(err) },)
+					},
 					cx.arm(DUMMY_SP,
 						vec![
 							cx.pat_ok(DUMMY_SP, rep_pat),
 						],
-						and_then
+						and_then.maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+							|| quote_stmt!(cx, debug!("matched");))
 					)
 				]
-			)
+			).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+				|| quote_stmt!(cx, debug!("try {}", $node_str);))
 		},
 	}
 }
@@ -1364,4 +1448,39 @@ fn set_view_item_attrs(attrs: Vec<ast::Attribute>, mut vi: ast::ViewItem) -> ast
 	assert_eq!(vi.attrs.len(), 0);
 	vi.attrs = attrs;
 	vi
+}
+
+trait FakeToTokens {
+	fn to_tokens(&self, cx: &ExtCtxt) -> Vec<ast::TokenTree>;
+}
+
+impl FakeToTokens for String {
+	fn to_tokens(&self, cx: &ExtCtxt) -> Vec<ast::TokenTree> {
+		self.as_slice().to_tokens(cx)
+	}
+}
+
+trait MaybePrefixStatement {
+	fn maybe_prefix_stmt(self, do_prefix: bool, sp: codemap::Span, stmt_f: || -> P<ast::Stmt>) -> P<ast::Expr>;
+}
+
+impl MaybePrefixStatement for P<ast::Expr> {
+	fn maybe_prefix_stmt(self, do_prefix: bool, sp: codemap::Span, stmt_f: || -> P<ast::Stmt>) -> P<ast::Expr> {
+		if do_prefix {
+			P(ast::Expr {
+				id: ast::DUMMY_NODE_ID,
+				node: ast::ExprBlock(P(ast::Block {
+					view_items: vec![],
+					stmts: vec![stmt_f()],
+					expr: Some(self),
+					id: ast::DUMMY_NODE_ID,
+					rules: ast::DefaultBlock,
+					span: sp,
+				})),
+				span: sp,
+			})
+		} else {
+			self
+		}
+	}
 }

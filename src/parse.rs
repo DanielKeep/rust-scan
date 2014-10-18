@@ -92,13 +92,14 @@ pub use self::scan_pattern::RepeatRange;
 #[deriving(Show)]
 pub enum ScanArm {
 	FallbackArm(Option<Spanned<ast::Ident>>),
-	PatternArm(PatAst, Option<Spanned<ast::Ident>>, ScanAttrs),
+	PatternArm(PatAst, Option<Spanned<ast::Ident>>, ScanArmAttrs),
 }
 
 #[deriving(Show)]
-pub struct ScanAttrs {
+pub struct ScanArmAttrs {
 	pub pat_tok: ArmTokenizer,
 	pub inp_tok: String,
+	pub trace: bool,
 }
 
 #[deriving(Show)]
@@ -117,7 +118,7 @@ pub fn parse_scan_arm(cx: &mut ExtCtxt, p: &mut Parser) -> (ScanArm, P<ast::Expr
 	(arm_pat, arm_expr)
 }
 
-fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanAttrs {
+fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 	debug!("parse_scan_arm_attrs(cx, p @ {})", p.token);
 
 	fn lit_str<'a>(lit: &'a ast::Lit) -> Option<&'a str> {
@@ -129,6 +130,7 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanAttrs {
 
 	let mut pat_tok = None;
 	let mut inp_tok = None;
+	let mut trace = None;
 
 	for attr in p.parse_outer_attributes().into_iter() {
 		match attr.node.value.node {
@@ -155,6 +157,9 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanAttrs {
 					cx.span_fatal(value.span, "runtime_tok must be a string"));
 				inp_tok = Some(value.into_string());
 			},
+			ast::MetaWord(ref name) if name.get() == "trace" => {
+				trace = Some(true);
+			},
 			_ => {
 				cx.span_fatal(attr.span, "unrecognised attribute")
 			}
@@ -163,14 +168,16 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanAttrs {
 
 	let pat_tok = pat_tok.unwrap_or(WordsAndInts);
 	let inp_tok = inp_tok.unwrap_or("rt::tokenizer::WordsAndInts".into_string());
+	let trace = trace.unwrap_or(false);
 
-	ScanAttrs {
+	ScanArmAttrs {
 		pat_tok: pat_tok,
 		inp_tok: inp_tok,
+		trace: trace,
 	}
 }
 
-fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser, attrs: ScanAttrs) -> ScanArm {
+fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser, attrs: ScanArmAttrs) -> ScanArm {
 	debug!("parse_scan_pattern(cx, p @ {}, {})", p.token, attrs);
 	debug!("parse_scan_pattern(cx, p @ {})", p.token);
 	fn parse_fallback_ident(_: &mut ExtCtxt, p: &mut Parser) -> Option<Spanned<ast::Ident>> {
@@ -264,8 +271,81 @@ mod scan_pattern {
 		},
 	}
 
+	impl ::std::fmt::String for PatAst {
+		fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::FormatError> {
+			match self {
+				&AstAlternates(ref alts) => {
+					try!(write!(f, "("));
+					let mut alts = alts.iter();
+					if let Some(alt) = alts.next() {
+						try!(write!(f, "{:s}", *alt));
+					}
+					for alt in alts {
+						try!(write!(f, "|{:s}", *alt));
+					}
+					try!(write!(f, ")"));
+				},
+				&AstSequence(ref nodes) => {
+					try!(write!(f, "("));
+					let mut nodes = nodes.iter();
+					if let Some(node) = nodes.next() {
+						try!(write!(f, "{:s}", *node));
+					}
+					for node in nodes {
+						try!(write!(f, " {:s}", *node));
+					}
+					try!(write!(f, ")"));
+				},
+				&AstText(ref s) => {
+					try!(write!(f, "\"{}\"", s.escape_default()));
+				},
+				&AstRegex(ref s) => {
+					try!(write!(f, "/\"{}\"", s.escape_default()));
+				},
+				&AstOptional(ref node) => {
+					try!(write!(f, "({:s})?", **node));
+				},
+				&AstCapture(ref ident, ref m_ty) => {
+					try!(write!(f, "{}", ident.node));
+					if let Some(ref ty) = *m_ty {
+						try!(write!(f, ":{}", **ty));
+					}
+				},
+				&AstSliceCapture(ref ident, ref node) => {
+					try!(write!(f, "{}={:s}", ident.node, **node));
+				},
+				&AstLookahead(ref node) => {
+					try!(write!(f, "(?! {:s}", **node));
+				},
+				&AstRepetition { ref node, ref sep, range } => {
+					try!(write!(f, "[{:s}]", **node));
+					if let Some(ref sep) = *sep {
+						try!(write!(f, "{:s}", **sep));
+					}
+					try!(write!(f, "{:s}", range));
+				},
+			}
+			Ok(())
+		}
+	}
+
 	#[deriving(Show)]
 	pub struct RepeatRange(pub uint, pub Option<uint>);
+
+	impl ::std::fmt::String for RepeatRange {
+		fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::FormatError> {
+			let &RepeatRange(n, m) = self;
+			match (n, m) {
+				(0, None) => try!(write!(f, "*")),
+				(1, None) => try!(write!(f, "+")),
+				(n, None) => try!(write!(f, "{{{},}}", n)),
+				(0, Some(m)) => try!(write!(f, "{{,{}}}", m)),
+				(n, Some(m)) if n == m => try!(write!(f, "{{{}}}", n)),
+				(n, Some(m)) => try!(write!(f, "{{{},{}}}", n, m))
+			}
+			Ok(())
+		}
+	}
 
 	/*
 		<pattern> := <attributes> <alternates>

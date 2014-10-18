@@ -246,6 +246,8 @@ extern crate scan_util;
 pub mod parse;
 pub mod plugin;
 
+mod util;
+
 #[plugin_registrar]
 pub fn plugin_registrar(reg: &mut rustc::plugin::Registry) {
 	reg.register_macro("scan", plugin::expand_scan);
