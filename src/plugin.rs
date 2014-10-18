@@ -964,7 +964,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 					)
 				]
 			).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
-				|| quote_stmt!(cx, format!("try {}", $node_str);))
+				|| quote_stmt!(cx, debug!("try {}", $node_str);))
 		},
 		AstSliceCapture(ident, box node) => {
 			// This is a bit like a cross between a single-branch alternate and a repetition.  We have similar capture-return behaviour to the former, similar sub-pattern scanning to the latter.
