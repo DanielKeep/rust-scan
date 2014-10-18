@@ -69,12 +69,15 @@ These are used to determine how whitespace is treated, both when tokenising text
 * `explicit_any` - runs of whitespace and/or end of line sequences are all turned into a single explicit token.
 * `exact` - all whitespace characters are turned into literal tokens.
 
-# Case Rules
+# String Comparison
 
-These can be specified on a pattern using the `#[case="..."]` syntax.
+You can control how strings are compared using the `#[compare="..."]` syntax.
 
-* `ignore` (default) - use case-insensitive matches.
-* `exact` - use case-sensitive matches.
+* `CaseInsensitive` (default) - ignore case differences between strings.  Unicode normalisation is *not* done.  Note that this is *not* currently correct; it works by lowercasing individual code points and does not account for code points that map to multiple code points when lowercased.  It also does not take the user's locale into account.  As such, the exact behaviour of this setting may changein the future.
+* `AsciiCaseInsensitive` - ignore case differences between strings for code points in the ASCII range.  Unicode normalisation is *not* done.
+* `Exact` - strings will be compared for exact, binary equality.  Unicode normalisation is *not* done.
+
+You can also specify a different runtime string comparison setting with `#[runtime_cmp="..."]` .  In addition to the above values, `runtime_cmp` can use any path to a value which implements the `CompareStrs` trait.
 
  */
 use syntax::ast;
@@ -99,6 +102,8 @@ pub enum ScanArm {
 pub struct ScanArmAttrs {
 	pub pat_tok: ArmTokenizer,
 	pub inp_tok: String,
+	pub pat_cs: ArmCompareStrs,
+	pub inp_cs: String,
 	pub trace: bool,
 }
 
@@ -108,6 +113,13 @@ pub enum ArmTokenizer {
 	IdentsAndInts,
 	SpaceDelimited,
 	ExplicitTok,
+}
+
+#[deriving(Show)]
+pub enum ArmCompareStrs {
+	CaseInsensitive,
+	AsciiCaseInsensitive,
+	ExactCS,
 }
 
 pub fn parse_scan_arm(cx: &mut ExtCtxt, p: &mut Parser) -> (ScanArm, P<ast::Expr>) {
@@ -130,6 +142,8 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 
 	let mut pat_tok = None;
 	let mut inp_tok = None;
+	let mut pat_cs = None;
+	let mut inp_cs = None;
 	let mut trace = None;
 
 	for attr in p.parse_outer_attributes().into_iter() {
@@ -157,6 +171,28 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 					cx.span_fatal(value.span, "runtime_tok must be a string"));
 				inp_tok = Some(value.into_string());
 			},
+			ast::MetaNameValue(ref name, ref value) if name.get() == "compare" => {
+				let value_span = value.span;
+				let value = lit_str(value).unwrap_or_else(||
+					cx.span_fatal(value_span, "compare must be a string"));
+
+				let (cs_enum, cs_str) = match value {
+					"CaseInsensitive" => (CaseInsensitive, "CaseInsensitive"),
+					"AsciiCaseInsensitive" => (AsciiCaseInsensitive, "AsciiCaseInsensitive"),
+					"Exact" => (ExactCS, "Exact"),
+					_ => cx.span_fatal(value_span, "unrecognised compare")
+				};
+
+				pat_cs = Some(cs_enum);
+				if inp_cs.is_none() {
+					inp_cs = Some(format!("rt::compare_strs::{}", cs_str));
+				}
+			},
+			ast::MetaNameValue(ref name, ref value) if name.get() == "runtime_cmp" => {
+				let value = lit_str(value).unwrap_or_else(||
+					cx.span_fatal(value.span, "runtime_cmp must be a string"));
+				inp_cs = Some(value.into_string());
+			},
 			ast::MetaWord(ref name) if name.get() == "trace" => {
 				trace = Some(true);
 			},
@@ -168,11 +204,15 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 
 	let pat_tok = pat_tok.unwrap_or(WordsAndInts);
 	let inp_tok = inp_tok.unwrap_or("rt::tokenizer::WordsAndInts".into_string());
+	let pat_cs = pat_cs.unwrap_or(CaseInsensitive);
+	let inp_cs = inp_cs.unwrap_or("rt::compare_strs::CaseInsensitive".into_string());
 	let trace = trace.unwrap_or(false);
 
 	ScanArmAttrs {
 		pat_tok: pat_tok,
 		inp_tok: inp_tok,
+		pat_cs: pat_cs,
+		inp_cs: inp_cs,
 		trace: trace,
 	}
 }

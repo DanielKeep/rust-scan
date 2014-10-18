@@ -15,7 +15,7 @@ use parse::parse_scan_arm;
 use parse::{ScanArm, FallbackArm, PatternArm, ScanArmAttrs};
 use parse::PatAst;
 
-use scan_util::{Tokenizer, Whitespace};
+use scan_util::{Tokenizer, Whitespace, CompareStrs};
 
 #[deriving(Show)]
 enum ScanKind {
@@ -164,6 +164,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 				io,
 				tokenizer,
 				whitespace,
+				compare_strs,
 				ScanError, NothingMatched, OtherScanError, ScanIoError,
 				Scanner,
 			};
@@ -201,7 +202,8 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 					let cur = rt::Cursor::new(
 						_input,
 						rt::tokenizer::WordsAndInts,
-						rt::whitespace::Ignore);
+						rt::whitespace::Ignore,
+						rt::compare_strs::CaseInsensitive);
 					//let mut result = rt::Err(rt::NothingMatched);
 					let mut result: rt::Result<_, rt::ScanError>;
 
@@ -365,8 +367,11 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 						attrs.inp_tok.as_slice().split_str("::").map(|s| cx.ident_of(s)).collect()
 					));
 					let sp = quote_expr!(cx, rt::whitespace::Ignore);
+					let cs = cx.expr_path(cx.path(DUMMY_SP,
+						attrs.inp_cs.as_slice().split_str("::").map(|s| cx.ident_of(s)).collect()
+					));
 					let cur_stmt = quote_stmt!(cx,
-						let cur = rt::Cursor::new(_input, $tok, $sp);
+						let cur = rt::Cursor::new(_input, $tok, $sp, $cs);
 					);
 					Some(cur_stmt)
 				},
@@ -756,7 +761,8 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 		},
 		AstText(s) => {
 			use parse::{WordsAndInts, IdentsAndInts, SpaceDelimited, ExplicitTok};
-			use scan_util::{Tokenizer, tokenizer};
+			use parse::{CaseInsensitive, AsciiCaseInsensitive, ExactCS};
+			use scan_util::{Tokenizer, tokenizer, CompareStrs, compare_strs};
 
 			// TODO: allow these to be overridden.
 			let tc = match attrs.pat_tok {
@@ -766,10 +772,15 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 				ExplicitTok => box tokenizer::Explicit as Box<Tokenizer>,
 			};
 			let sp = ::scan_util::whitespace::Ignore;
+			let cs = match attrs.pat_cs {
+				CaseInsensitive => box compare_strs::CaseInsensitive as Box<CompareStrs>,
+				AsciiCaseInsensitive => box compare_strs::AsciiCaseInsensitive as Box<CompareStrs>,
+				ExactCS => box compare_strs::Exact as Box<CompareStrs>,
+			};
 
 			let mut and_then = and_then;
 
-			for tok in text_to_tokens(s.as_slice(), &*tc, &sp).into_iter().rev() {
+			for tok in text_to_tokens(s.as_slice(), &*tc, &sp, &*cs).into_iter().rev() {
 				let tok_expr = str_to_expr(cx, tok);
 				/*and_then = quote_expr!(cx, {
 					match cur.expect_tok($tok_expr) {
@@ -1431,7 +1442,7 @@ fn enumerate_captures(node: &PatAst) -> CaptureMap {
 	}
 }
 
-fn text_to_tokens<'a>(s: &'a str, tc: &Tokenizer, sp: &Whitespace) -> Vec<&'a str> {
+fn text_to_tokens<'a>(s: &'a str, tc: &Tokenizer, sp: &Whitespace, _: &CompareStrs) -> Vec<&'a str> {
 	let mut toks = vec![];
 	let mut s = s;
 
