@@ -652,7 +652,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 						let msg = format!("alt branch {:s} matched", node);
 						let msg = msg.as_slice();
 						quote_expr!(cx, {
-							debug!($msg);
+							debug!("{}", $msg);
 							$result_expr
 						})
 					} else {
@@ -670,7 +670,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 					let msg = msg.as_slice();
 					cx.expr_block(cx.block(DUMMY_SP,
 						vec![
-							quote_stmt!(cx, debug!($msg);),
+							quote_stmt!(cx, debug!("{}", $msg);),
 						],
 						Some(alt_expr)
 					))
