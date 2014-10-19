@@ -18,6 +18,6 @@ fn do_scan(s: &str) {
 		#[trace] "hi" ("there"|"!")? => (),
 		#[trace] /"z{4,7}" => (),
 		#[trace] "bye" ("now"|".")? => (),
-		#[trace] "not" [(?!"even") word=/r"[^\s]+"]{2} => (),
+		#[trace] "not" [(?!"even") _=/r"[^\s]+"]{2} => (),
 	};
 }

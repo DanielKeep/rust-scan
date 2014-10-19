@@ -28,7 +28,7 @@ fn test_scan() {
 fn do_scan(s: &str) -> Result<String, scan_util::ScanError> {
 	scan! {
 		s,
-		"nums (" nums=[_n:int]* ")" => nums.into_string(),
+		"nums (" nums=[_:int]* ")" => nums.into_string(),
 		yesno = ("yes" | "no") => yesno.into_string(),
 	}
 }
