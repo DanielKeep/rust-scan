@@ -931,7 +931,8 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 		},
 		AstCapture(ident, ty) => {
 			/*quote_expr!(cx, {
-				match rt::Scanner::scan(&cur.pop_ws()) {
+				let cur_tmp = cur.pop_ws(); // Work around possible bug in rustc.
+				match rt::Scanner::scan(&cur_tmp) {
 					Err(err) => Err(err),
 					Ok((val, cur)) => {
 						${
@@ -944,49 +945,54 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 					}
 				}
 			})*/
-			cx.expr_match(DUMMY_SP,
-				quote_expr!(cx, rt::Scanner::scan(&cur.pop_ws())),
+			cx.expr_block(cx.block(DUMMY_SP,
 				vec![
-					{
-						let trace_stmt = if attrs.trace {
-							Some(quote_stmt!(cx, debug!("did not match {:s}", err);))
-						} else {
-							None
-						};
-						quote_arm!(cx, rt::Err(err) => { $trace_stmt rt::Err(err) },)
-					},
-					cx.arm(DUMMY_SP,
-						vec![
-							quote_pat!(cx, rt::Ok((val, cur))),
-						],
-						cx.expr_block(
-							cx.block(DUMMY_SP,
-								vec![
-									/*quote_stmt!(cx,
-										let $ident: $ty = val;
-									),*/
-									match (ident.node.as_str() != "_", ty) {
-										(_, None) => cx.stmt_let(ident.span,
-											/*mutbl:*/false,
-											ident.node,
-											quote_expr!(cx, val)
-										),
-										(_, Some(ty)) => cx.stmt_let_typed(ident.span,
-											/*mutbl:*/false,
-											ident.node,
-											ty,
-											quote_expr!(cx, val)
-										),
-										//(false, _) => quote_stmt!(cx, let _ = ();)
-									},
-								],
-								Some(and_then)
-							)
-						).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
-							|| quote_stmt!(cx, debug!("matched");))
-					)
-				]
-			).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+					quote_stmt!(cx, let cur_tmp = cur.pop_ws();),
+				],
+				Some(cx.expr_match(DUMMY_SP,
+					quote_expr!(cx, rt::Scanner::scan(&cur_tmp)),
+					vec![
+						{
+							let trace_stmt = if attrs.trace {
+								Some(quote_stmt!(cx, debug!("did not match {:s}", err);))
+							} else {
+								None
+							};
+							quote_arm!(cx, rt::Err(err) => { $trace_stmt rt::Err(err) },)
+						},
+						cx.arm(DUMMY_SP,
+							vec![
+								quote_pat!(cx, rt::Ok((val, cur))),
+							],
+							cx.expr_block(
+								cx.block(DUMMY_SP,
+									vec![
+										/*quote_stmt!(cx,
+											let $ident: $ty = val;
+										),*/
+										match (ident.node.as_str() != "_", ty) {
+											(_, None) => cx.stmt_let(ident.span,
+												/*mutbl:*/false,
+												ident.node,
+												quote_expr!(cx, val)
+											),
+											(_, Some(ty)) => cx.stmt_let_typed(ident.span,
+												/*mutbl:*/false,
+												ident.node,
+												ty,
+												quote_expr!(cx, val)
+											),
+											//(false, _) => quote_stmt!(cx, let _ = ();)
+										},
+									],
+									Some(and_then)
+								)
+							).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
+								|| quote_stmt!(cx, debug!("matched");))
+						)
+					]
+				))
+			)).maybe_prefix_stmt(attrs.trace, DUMMY_SP,
 				|| quote_stmt!(cx, debug!("try {}", $node_str);))
 		},
 		AstSliceCapture(ident, box node) => {
