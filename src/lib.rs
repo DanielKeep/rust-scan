@@ -243,8 +243,8 @@ extern crate syntax;
 
 extern crate scan_util;
 
-pub mod parse;
-pub mod plugin;
+mod parse;
+mod plugin;
 
 mod util;
 
