@@ -165,7 +165,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 				tokenizer,
 				whitespace,
 				compare_strs,
-				ScanError, NothingMatched, OtherScanError, ScanIoError,
+				ScanError, OtherScanError, ScanIoError,
 				Scanner,
 			};
 		});
@@ -204,7 +204,6 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 						rt::tokenizer::WordsAndInts,
 						rt::whitespace::Ignore,
 						rt::compare_strs::CaseInsensitive);
-					//let mut result = rt::Err(rt::NothingMatched);
 					let mut result: rt::Result<_, rt::ScanError>;
 
 					$scan_arm_stmts
