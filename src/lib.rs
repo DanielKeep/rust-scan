@@ -177,7 +177,7 @@ fn identify_banana<S: Str>(s: S) -> &'static str {
 		"banana" => "definitely a banana",
 		"crowbar" => "giant metal banana",
 		"human finger" => "tiny crunchy banana",
-		"na"{8} => "Batman!",
+		["na"]{8} => "Batman!",
 		_ => "probably not a banana"
 	}).unwrap()
 }
