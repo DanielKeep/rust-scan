@@ -366,7 +366,9 @@ fn gen_arm_stmt(cx: &mut ExtCtxt, arm: (ScanArm, P<ast::Expr>), is_first: bool, 
 					let tok = cx.expr_path(cx.path(DUMMY_SP,
 						attrs.inp_tok.as_slice().split_str("::").map(|s| cx.ident_of(s)).collect()
 					));
-					let sp = quote_expr!(cx, rt::whitespace::Ignore);
+					let sp = cx.expr_path(cx.path(DUMMY_SP,
+						attrs.inp_sp.as_slice().split_str("::").map(|s| cx.ident_of(s)).collect()
+					));
 					let cs = cx.expr_path(cx.path(DUMMY_SP,
 						attrs.inp_cs.as_slice().split_str("::").map(|s| cx.ident_of(s)).collect()
 					));
@@ -761,17 +763,23 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 		},
 		AstText(s) => {
 			use parse::{WordsAndInts, IdentsAndInts, SpaceDelimited, ExplicitTok};
+			use parse::{Ignore, ExplicitNewline, ExplicitSp, ExplicitAny, ExactSp};
 			use parse::{CaseInsensitive, AsciiCaseInsensitive, ExactCS};
-			use scan_util::{Tokenizer, tokenizer, CompareStrs, compare_strs};
+			use scan_util::{Tokenizer, tokenizer, Whitespace, whitespace, CompareStrs, compare_strs};
 
-			// TODO: allow these to be overridden.
 			let tc = match attrs.pat_tok {
 				WordsAndInts => box tokenizer::WordsAndInts as Box<Tokenizer>,
 				IdentsAndInts => box tokenizer::IdentsAndInts as Box<Tokenizer>,
 				SpaceDelimited => box tokenizer::SpaceDelimited as Box<Tokenizer>,
 				ExplicitTok => box tokenizer::Explicit as Box<Tokenizer>,
 			};
-			let sp = ::scan_util::whitespace::Ignore;
+			let sp = match attrs.pat_sp {
+				Ignore => box whitespace::Ignore as Box<Whitespace>,
+				ExplicitNewline => box whitespace::ExplicitNewline as Box<Whitespace>,
+				ExplicitSp => box whitespace::Explicit as Box<Whitespace>,
+				ExplicitAny => box whitespace::ExplicitAny as Box<Whitespace>,
+				ExactSp => box whitespace::Exact as Box<Whitespace>,
+			};
 			let cs = match attrs.pat_cs {
 				CaseInsensitive => box compare_strs::CaseInsensitive as Box<CompareStrs>,
 				AsciiCaseInsensitive => box compare_strs::AsciiCaseInsensitive as Box<CompareStrs>,
@@ -780,7 +788,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 
 			let mut and_then = and_then;
 
-			for tok in text_to_tokens(s.as_slice(), &*tc, &sp, &*cs).into_iter().rev() {
+			for tok in text_to_tokens(s.as_slice(), &*tc, &*sp, &*cs).into_iter().rev() {
 				let tok_expr = str_to_expr(cx, tok);
 				/*and_then = quote_expr!(cx, {
 					match cur.expect_tok($tok_expr) {
@@ -1447,20 +1455,30 @@ fn text_to_tokens<'a>(s: &'a str, tc: &Tokenizer, sp: &Whitespace, _: &CompareSt
 	let mut s = s;
 
 	while s.len() > 0 {
+		s = s.slice_from(sp.strip_len(s));
+
 		match sp.token_len(s) {
-			None => (),
-			Some(end) => {
-				toks.push(s.slice_to(end));
+			Some((end, tok)) => {
+				toks.push(tok);
 				s = s.slice_from(end);
 				continue;
 			}
+			None => (),
 		}
 
 		s = s.slice_from(sp.strip_len(s));
-		if s.len() > 0 {
-			let end = tc.token_len(s).unwrap_or(1);
-			toks.push(s.slice_to(end));
-			s = s.slice_from(end);
+		match tc.token_len(s) {
+			Some(end) => {
+				toks.push(s.slice_to(end));
+				s = s.slice_from(end);
+			},
+			None => {
+				if s.len() > 0 {
+					let cr = s.char_range_at(0);
+					toks.push(s.slice_to(cr.next));
+					s = s.slice_from(cr.next);
+				}
+			}
 		}
 	}
 

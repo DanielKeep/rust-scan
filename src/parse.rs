@@ -63,11 +63,13 @@ These can be specified on a pattern using the `#[space="..."]` syntax.
 
 These are used to determine how whitespace is treated, both when tokenising text in the pattern *and* when matching against input at runtime.
 
-* `ignore` (default) - whitespace between tokens is ignored.
-* `explicit_newline` - end of line sequences are turned into an explicit token; all other whitespace is ignored.
-* `explicit` - runs of whitespace and end of line sequences are each turned into an explicit token.
-* `explicit_any` - runs of whitespace and/or end of line sequences are all turned into a single explicit token.
-* `exact` - all whitespace characters are turned into literal tokens.
+* `Ignore` (default) - whitespace between tokens is ignored.
+* `ExplicitNewline` - end of line sequences are turned into an explicit token; all other whitespace is ignored.
+* `Explicit` - runs of whitespace and end of line sequences are each turned into an explicit token.
+* `ExplicitAny` - runs of whitespace and/or end of line sequences are all turned into a single explicit token.
+* `Exact` - all whitespace characters are turned into literal tokens.
+
+You can also specify a different runtime whitespace policy using `#[runtime_sp="..."]`.  In addition to the above values, `runtime_sp` can use any path to a value which implements the `Whitespace` trait.
 
 # String Comparison
 
@@ -102,6 +104,8 @@ pub enum ScanArm {
 pub struct ScanArmAttrs {
 	pub pat_tok: ArmTokenizer,
 	pub inp_tok: String,
+	pub pat_sp: ArmWhitespace,
+	pub inp_sp: String,
 	pub pat_cs: ArmCompareStrs,
 	pub inp_cs: String,
 	pub trace: bool,
@@ -113,6 +117,15 @@ pub enum ArmTokenizer {
 	IdentsAndInts,
 	SpaceDelimited,
 	ExplicitTok,
+}
+
+#[deriving(Show)]
+pub enum ArmWhitespace {
+	Ignore,
+	ExplicitNewline,
+	ExplicitSp,
+	ExplicitAny,
+	ExactSp,
 }
 
 #[deriving(Show)]
@@ -142,6 +155,8 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 
 	let mut pat_tok = None;
 	let mut inp_tok = None;
+	let mut pat_sp = None;
+	let mut inp_sp = None;
 	let mut pat_cs = None;
 	let mut inp_cs = None;
 	let mut trace = None;
@@ -170,6 +185,30 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 				let value = lit_str(value).unwrap_or_else(||
 					cx.span_fatal(value.span, "runtime_tok must be a string"));
 				inp_tok = Some(value.into_string());
+			},
+			ast::MetaNameValue(ref name, ref value) if name.get() == "space" => {
+				let value_span = value.span;
+				let value = lit_str(value).unwrap_or_else(||
+					cx.span_fatal(value_span, "space must be a string"));
+
+				let (sp_enum, sp_str) = match value {
+					"Ignore" => (Ignore, "Ignore"),
+					"ExplicitNewline" => (ExplicitNewline, "ExplicitNewline"),
+					"Explicit" => (ExplicitSp, "Explicit"),
+					"ExplicitAny" => (ExplicitAny, "ExplicitAny"),
+					"Exact" => (ExactSp, "Exact"),
+					_ => cx.span_fatal(value_span, "unrecognised space")
+				};
+
+				pat_sp = Some(sp_enum);
+				if inp_sp.is_none() {
+					inp_sp = Some(format!("rt::whitespace::{}", sp_str));
+				}
+			},
+			ast::MetaNameValue(ref name, ref value) if name.get() == "runtime_sp" => {
+				let value = lit_str(value).unwrap_or_else(||
+					cx.span_fatal(value.span, "runtime_sp must be a string"));
+				inp_sp = Some(value.into_string());
 			},
 			ast::MetaNameValue(ref name, ref value) if name.get() == "compare" => {
 				let value_span = value.span;
@@ -204,6 +243,8 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 
 	let pat_tok = pat_tok.unwrap_or(WordsAndInts);
 	let inp_tok = inp_tok.unwrap_or("rt::tokenizer::WordsAndInts".into_string());
+	let pat_sp = pat_sp.unwrap_or(Ignore);
+	let inp_sp = inp_sp.unwrap_or("rt::whitespace::Ignore".into_string());
 	let pat_cs = pat_cs.unwrap_or(CaseInsensitive);
 	let inp_cs = inp_cs.unwrap_or("rt::compare_strs::CaseInsensitive".into_string());
 	let trace = trace.unwrap_or(false);
@@ -211,6 +252,8 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 	ScanArmAttrs {
 		pat_tok: pat_tok,
 		inp_tok: inp_tok,
+		pat_sp: pat_sp,
+		inp_sp: inp_sp,
 		pat_cs: pat_cs,
 		inp_cs: inp_cs,
 		trace: trace,
