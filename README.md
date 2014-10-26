@@ -1,5 +1,7 @@
 # rust-scan
 
+[![Build Status](https://travis-ci.org/DanielKeep/rust-scan.svg?branch=master)](https://travis-ci.org/DanielKeep/rust-scan)
+
 A pattern-based `scanf` alternative for Rust.
 
 This is still a work-in-progress.
