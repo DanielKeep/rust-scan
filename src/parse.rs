@@ -180,7 +180,7 @@ fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser, attrs: ScanArmAttrs) -> 
 	debug!("parse_scan_pattern(cx, p @ {}, {})", p.token, attrs);
 	debug!("parse_scan_pattern(cx, p @ {})", p.token);
 	fn parse_fallback_ident(_: &mut ExtCtxt, p: &mut Parser) -> Option<Spanned<ast::Ident>> {
-		if p.eat(&token::UNDERSCORE) {
+		if p.eat(&token::Underscore) {
 			None
 		} else {
 			Some(respan(p.span, p.parse_ident()))
@@ -188,34 +188,34 @@ fn parse_scan_pattern(cx: &mut ExtCtxt, p: &mut Parser, attrs: ScanArmAttrs) -> 
 	}
 
 	// This *might* be a fallback pattern.
-	if p.token == token::UNDERSCORE {
+	if p.token == token::Underscore {
 		// ISSUE #15: currently, `_ => ()` is an anonymous fallback arm.  After a little while, change it so that it does an anonymous capture of a single *token*, rather than the whole line.
-		if p.look_ahead(1, |t| *t == token::FAT_ARROW) {
+		if p.look_ahead(1, |t| *t == token::FatArrow) {
 			p.fatal("in the future, a lone `_` will be an anonymous token capture; use `.._` instead.");
 		}
-	} else if p.token == token::DOTDOT {
+	} else if p.token == token::DotDot {
 		p.bump();
 		let ident = parse_fallback_ident(cx, p);
-		p.expect(&token::FAT_ARROW);
+		p.expect(&token::FatArrow);
 		return FallbackArm(ident)
 	}
 
 	let pat_ast = scan_pattern::parse_pattern(cx, p);
 
-	p.expect_one_of(&[], &[token::COMMA, token::FAT_ARROW]);
+	p.expect_one_of(&[], &[token::Comma, token::FatArrow]);
 	match p.bump_and_get() {
-		token::COMMA => {
+		token::Comma => {
 			// Has fallback.
-			p.expect(&token::DOTDOT);
+			p.expect(&token::DotDot);
 			let ident = parse_fallback_ident(cx, p);
-			p.expect(&token::FAT_ARROW);
+			p.expect(&token::FatArrow);
 			PatternArm(pat_ast, ident, attrs)
 		},
-		token::FAT_ARROW => {
+		token::FatArrow => {
 			// No fallback.
 			PatternArm(pat_ast, None, attrs)
 		},
-		_ => fail!()
+		_ => panic!()
 	}
 }
 
@@ -230,14 +230,14 @@ fn parse_arm_expr(_: &mut ExtCtxt, p: &mut Parser) -> P<ast::Expr> {
 	{
 		let require_comma =
 			!::syntax::parse::classify::expr_is_simple_block(&*arm_expr)
-			&& p.token != token::RBRACE;
+			&& p.token != token::CloseDelim(token::Brace);
 
 		if require_comma {
 			debug!("parse_arm_expr - require comma");
-			p.commit_expr(&*arm_expr, &[token::COMMA], &[token::RBRACE, token::EOF]);
+			p.commit_expr(&*arm_expr, &[token::Comma], &[token::CloseDelim(token::Brace), token::Eof]);
 		} else {
 			debug!("parse_arm_expr - don't require comma");
-			p.eat(&token::COMMA);
+			p.eat(&token::Comma);
 		}
 	}
 
@@ -362,7 +362,7 @@ mod scan_pattern {
 	fn parse_alternates(cx: &mut ExtCtxt, p: &mut Parser) -> PatAst {
 		debug!("parse_alternates(cx, p @ {})", p.token);
 		let mut alts = vec![parse_sequence(cx, p)];
-		while p.eat(&token::BINOP(token::OR)) {
+		while p.eat(&token::BinOp(token::Or)) {
 			alts.push(parse_sequence(cx, p));
 		}
 		if alts.len() == 1 {
@@ -415,7 +415,7 @@ mod scan_pattern {
 		debug!("try_parse_maybe_text(cx, p @ {})", p.token);
 		try_parse_text(cx, p)
 			.and_then(|node| {
-				if p.eat(&token::QUESTION) {
+				if p.eat(&token::Question) {
 					Some(AstOptional(box node))
 				} else {
 					Some(node)
@@ -431,11 +431,11 @@ mod scan_pattern {
 
 	fn try_parse_str_lit(_: &mut ExtCtxt, p: &mut Parser) -> Option<String> {
 		match p.token {
-			token::LIT_STR(ident) => {
+			token::LitStr(ident) => {
 				p.bump();
 				Some(::syntax::parse::str_lit(ident.as_str()))
 			},
-			token::LIT_STR_RAW(ident, _) => {
+			token::LitStrRaw(ident, _) => {
 				p.bump();
 				Some(::syntax::parse::raw_str_lit(ident.as_str()))
 			},
@@ -448,7 +448,7 @@ mod scan_pattern {
 		debug!("try_parse_maybe_regex(cx, p @ {})", p.token);
 		try_parse_regex(cx, p)
 			.and_then(|node| {
-				if p.eat(&token::QUESTION) {
+				if p.eat(&token::Question) {
 					Some(AstOptional(box node))
 				} else {
 					Some(node)
@@ -459,7 +459,7 @@ mod scan_pattern {
 	// <regex> := "/" <text>
 	fn try_parse_regex(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_regex(cx, p @ {})", p.token);
-		if p.eat(&token::BINOP(token::SLASH)) {
+		if p.eat(&token::BinOp(token::Slash)) {
 			match try_parse_str_lit(cx, p) {
 				Some(s) => Some(AstRegex(s)),
 				None => p.fatal("expected string literal")
@@ -474,7 +474,7 @@ mod scan_pattern {
 		debug!("try_parse_maybe_capture(cx, p @ {})", p.token);
 		try_parse_capture(cx, p)
 			.and_then(|node| {
-				if p.eat(&token::QUESTION) {
+				if p.eat(&token::Question) {
 					Some(AstOptional(box node))
 				} else {
 					Some(node)
@@ -486,12 +486,12 @@ mod scan_pattern {
 	fn try_parse_capture(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_capture(cx, p @ {})", p.token);
 		let ident = match p.token {
-			token::IDENT(ident, _) => {
+			token::Ident(ident, _) => {
 				let sp = p.span;
 				p.bump();
 				respan(sp, ident)
 			},
-			token::UNDERSCORE => {
+			token::Underscore => {
 				let sp = p.span;
 				p.bump();
 				respan(sp, cx.ident_of("_"))
@@ -509,7 +509,7 @@ mod scan_pattern {
 	// <slice-capture> := "=" <non-capture-atom>
 	fn try_parse_slice_capture(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_slice_capture(cx, p @ {})", p.token);
-		if p.eat(&token::EQ) {
+		if p.eat(&token::Eq) {
 			Some(parse_non_capture_atom(cx, p))
 		} else {
 			None
@@ -519,7 +519,7 @@ mod scan_pattern {
 	// <constraint> := ":" <type>
 	fn try_parse_constraint(_: &mut ExtCtxt, p: &mut Parser) -> Option<P<ast::Ty>> {
 		debug!("try_parse_constraint(cx, p @ {})", p.token);
-		if !p.eat(&token::COLON) {
+		if !p.eat(&token::Colon) {
 			return None
 		}
 
@@ -531,7 +531,7 @@ mod scan_pattern {
 		debug!("try_parse_maybe_group(cx, p @ {})", p.token);
 		try_parse_group(cx, p)
 			.and_then(|node| {
-				if p.eat(&token::QUESTION) {
+				if p.eat(&token::Question) {
 					Some(AstOptional(box node))
 				} else {
 					Some(node)
@@ -542,19 +542,19 @@ mod scan_pattern {
 	// <group> := "(" <alternates> ")"
 	fn try_parse_group(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_group(cx, p @ {})", p.token);
-		if !p.eat(&token::LPAREN) {
+		if !p.eat(&token::OpenDelim(token::Paren)) {
 			return None
 		}
 
-		let lookahead = if p.eat(&token::QUESTION) {
-			p.expect(&token::NOT);
+		let lookahead = if p.eat(&token::Question) {
+			p.expect(&token::Not);
 			true
 		} else {
 			false
 		};
 
 		let node = parse_alternates(cx, p);
-		p.expect(&token::RPAREN);
+		p.expect(&token::CloseDelim(token::Paren));
 
 		if lookahead {
 			Some(AstLookahead(box node))
@@ -566,12 +566,12 @@ mod scan_pattern {
 	// <repetition> := "[" <alternates> "]" <separator>? <repeat-range>
 	fn try_parse_repetition(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_repetition(cx, p @ {})", p.token);
-		if !p.eat(&token::LBRACKET) {
+		if !p.eat(&token::OpenDelim(token::Bracket)) {
 			return None
 		}
 
 		let node = parse_alternates(cx, p);
-		p.expect(&token::RBRACKET);
+		p.expect(&token::CloseDelim(token::Bracket));
 
 		let sep = try_parse_separator(cx, p).map(|n| box n);
 		let range = parse_repeat_range(cx, p);
@@ -583,19 +583,19 @@ mod scan_pattern {
 	fn try_parse_separator(cx: &mut ExtCtxt, p: &mut Parser) -> Option<PatAst> {
 		debug!("try_parse_separator(cx, p @ {})", p.token);
 		match p.token {
-			token::COMMA => {
+			token::Comma => {
 				p.bump();
 				Some(AstText(",".into_string()))
 			},
-			token::DOT => {
+			token::Dot => {
 				p.bump();
 				Some(AstText(".".into_string()))
 			},
-			token::SEMI => {
+			token::Semi => {
 				p.bump();
 				Some(AstText(";".into_string()))
 			},
-			token::COLON => {
+			token::Colon => {
 				p.bump();
 				Some(AstText(":".into_string()))
 			},
@@ -610,19 +610,19 @@ mod scan_pattern {
 	fn parse_repeat_range(cx: &mut ExtCtxt, p: &mut Parser) -> RepeatRange {
 		debug!("parse_repeat_range(cx, p @ {})", p.token);
 		match p.token {
-			token::QUESTION => {
+			token::Question => {
 				p.bump();
 				RepeatRange(0, Some(1))
 			},
-			token::BINOP(token::STAR) => {
+			token::BinOp(token::Star) => {
 				p.bump();
 				RepeatRange(0, None)
 			},
-			token::BINOP(token::PLUS) => {
+			token::BinOp(token::Plus) => {
 				p.bump();
 				RepeatRange(1, None)
 			},
-			token::LBRACE => parse_numeric_range(cx, p),
+			token::OpenDelim(token::Brace) => parse_numeric_range(cx, p),
 			_ => {
 				p.fatal("expected `?`, `*`, `+` or a numeric repeat range")
 			}
@@ -632,16 +632,16 @@ mod scan_pattern {
 	// <numeric-range> := "{" "," <uint> "}" | "{" <uint> ("," <uint>?)? "}"
 	fn parse_numeric_range(cx: &mut ExtCtxt, p: &mut Parser) -> RepeatRange {
 		debug!("parse_numeric_range(cx, p @ {})", p.token);
-		p.expect(&token::LBRACE);
+		p.expect(&token::OpenDelim(token::Brace));
 		let (min, max) = match p.token {
-			token::COMMA => {
+			token::Comma => {
 				// {,max} -> {0, max}
 				p.bump();
 				(0, Some(parse_uint(cx, p)))
 			},
-			token::LIT_INTEGER(_) => {
+			token::LitInteger(_) => {
 				let min = parse_uint(cx, p);
-				let max = if p.eat(&token::COMMA) {
+				let max = if p.eat(&token::Comma) {
 					match try_parse_uint(cx, p) {
 						Some(i) => Some(i), // {min, max}
 						None => None        // {min,} -> {min, infinity}
@@ -653,7 +653,7 @@ mod scan_pattern {
 			},
 			_ => p.fatal("expected `,` or an integer")
 		};
-		p.expect(&token::RBRACE);
+		p.expect(&token::CloseDelim(token::Brace));
 
 		RepeatRange(min, max)
 	}
@@ -661,7 +661,7 @@ mod scan_pattern {
 	fn try_parse_uint(cx: &mut ExtCtxt, p: &mut Parser) -> Option<uint> {
 		debug!("try_parse_uint(cx, p @ {})", p.token);
 		match p.token {
-			token::LIT_INTEGER(_) => Some(parse_uint(cx, p)),
+			token::LitInteger(_) => Some(parse_uint(cx, p)),
 			_ => None
 		}
 	}
@@ -669,7 +669,7 @@ mod scan_pattern {
 	fn parse_uint(_: &mut ExtCtxt, p: &mut Parser) -> uint {
 		debug!("parse_uint(cx, p @ {})", p.token);
 		let int_lit = match p.bump_and_get() {
-			token::LIT_INTEGER(s) => {
+			token::LitInteger(s) => {
 				parse::integer_lit(s.as_str(), &p.sess.span_diagnostic, p.span)
 			},
 			_ => p.fatal("expected integer literal")

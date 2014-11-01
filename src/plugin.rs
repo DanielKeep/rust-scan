@@ -30,7 +30,7 @@ pub fn expand_scan(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree]) 
 	let setup_stmts = vec![];
 
 	let input_expr = p.parse_expr();
-	p.expect(&token::COMMA);
+	p.expect(&token::Comma);
 
 	let input_expr = quote_expr!(cx, {
 		use std::str::Str;
@@ -72,7 +72,7 @@ pub fn expand_scanln_from(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::Token
 	let mut p = cx.new_parser_from_tts(tts);
 
 	let input_arg = p.parse_expr();
-	p.expect(&token::COMMA);
+	p.expect(&token::Comma);
 
 	let setup_stmts = vec![
 		quote_stmt!(cx, let line = rt::io::read_line($input_arg);),
@@ -97,7 +97,7 @@ pub fn expand_scanner(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree
 	let mut p = cx.new_parser_from_tts(tts);
 
 	let scan_ty = p.parse_ty(/*plus_allowed:*/false);
-	p.expect(&token::COMMA);
+	p.expect(&token::Comma);
 
 	let setup_stmts = vec![];
 
@@ -126,7 +126,7 @@ fn parse_scan_body(cx: &mut ExtCtxt, p: &mut Parser, sp: codemap::Span) -> (Vec<
 	let mut arms = vec![];
 	let mut fallback = None;
 
-	while p.token != token::EOF && fallback.is_none() {
+	while p.token != token::Eof && fallback.is_none() {
 		debug!("parse_scan_body - parsing scan arm");
 		match parse_scan_arm(cx, p) {
 			arm @ (FallbackArm(_), _) => fallback = Some(arm),
@@ -134,7 +134,7 @@ fn parse_scan_body(cx: &mut ExtCtxt, p: &mut Parser, sp: codemap::Span) -> (Vec<
 		}
 	}
 
-	if fallback.is_some() && p.token != token::EOF {
+	if fallback.is_some() && p.token != token::Eof {
 		debug!("parse_scan_body - got something after fallback");
 		let sp = p.span;
 		let tok_str = p.this_token_to_string();
@@ -1221,7 +1221,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 				}
 
 				// Hack to get around not being able to mark expressions with attributes.
-				#[allow(type_limits)]
+				#[allow(unused_comparisons)]
 				#[inline(always)]
 				fn check_repeats(got: uint) -> bool { $range_min <= got }
 
@@ -1346,7 +1346,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 					cx.stmt_item(DUMMY_SP,
 						quote_item!(cx,
 							// Hack to get around not being able to mark expressions with attributes.
-							#[allow(type_limits)]
+							#[allow(unused_comparisons)]
 							#[inline(always)]
 							fn check_repeats(got: uint) -> bool { $range_min <= got }
 						).unwrap()

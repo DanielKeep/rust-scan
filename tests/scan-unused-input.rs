@@ -1,5 +1,5 @@
 #![feature(phase)]
-#![forbid(unused_variable)]
+#![forbid(unused_variables)]
 
 #[phase(plugin)] extern crate scan;
 extern crate scan_util;
