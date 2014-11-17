@@ -403,7 +403,6 @@ The following is the grammar used to parse patterns.
 #![feature(phase)]
 #![feature(plugin_registrar)]
 #![feature(quote)]
-#![feature(struct_variant)]
 
 #[phase(plugin, link)] extern crate log;
 extern crate rustc;
