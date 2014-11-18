@@ -265,9 +265,9 @@ mod scan_pattern {
 		AstSliceCapture(Spanned<ast::Ident>, Box<PatAst>),
 		AstLookahead(Box<PatAst>),
 		AstRepetition {
-			pub node: Box<PatAst>,
-			pub sep: Option<Box<PatAst>>,
-			pub range: RepeatRange
+			node: Box<PatAst>,
+			sep: Option<Box<PatAst>>,
+			range: RepeatRange
 		},
 	}
 
