@@ -17,6 +17,8 @@ use parse::PatAst;
 
 use scan_util::{Tokenizer, Whitespace, CompareStrs};
 
+use self::ScanKind::{NormalScan, ScannerScan};
+
 #[deriving(Show)]
 enum ScanKind {
 	NormalScan,

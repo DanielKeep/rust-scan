@@ -10,6 +10,11 @@ use syntax::ptr::P;
 pub use self::scan_pattern::{PatAst, AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
 pub use self::scan_pattern::RepeatRange;
 
+pub use self::ScanArm::{FallbackArm, PatternArm};
+pub use self::ArmTokenizer::{WordsAndInts, IdentsAndInts, SpaceDelimited, ExplicitTok};
+pub use self::ArmWhitespace::{Ignore, ExplicitNewline, ExplicitSp, ExplicitAny, ExactSp};
+pub use self::ArmCompareStrs::{CaseInsensitive, AsciiCaseInsensitive, ExactCS};
+
 #[deriving(Show)]
 pub enum ScanArm {
 	FallbackArm(Option<Spanned<ast::Ident>>),
@@ -246,6 +251,8 @@ fn parse_arm_expr(_: &mut ExtCtxt, p: &mut Parser) -> P<ast::Expr> {
 }
 
 mod scan_pattern {
+	pub use self::PatAst::{AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
+
 	use syntax::ast;
 	use syntax::codemap::{Spanned, respan};
 	use syntax::parse;
