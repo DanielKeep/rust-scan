@@ -3,6 +3,8 @@
 #[phase(plugin)] extern crate scan;
 extern crate scan_util;
 
+use self::Expr::{Lit, Add, Sub, Mul, Div};
+
 #[deriving(Show)]
 struct Pair(pub int, pub int);
 
