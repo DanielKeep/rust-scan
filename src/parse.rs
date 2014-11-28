@@ -9,6 +9,7 @@ use syntax::ptr::P;
 
 pub use self::scan_pattern::{PatAst, AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
 pub use self::scan_pattern::RepeatRange;
+pub use self::scan_pattern::FormatSource;
 
 pub use self::ScanArm::{FallbackArm, PatternArm};
 pub use self::ArmTokenizer::{WordsAndInts, IdentsAndInts, SpaceDelimited, ExplicitTok};
@@ -250,8 +251,10 @@ fn parse_arm_expr(_: &mut ExtCtxt, p: &mut Parser) -> P<ast::Expr> {
 	arm_expr
 }
 
-mod scan_pattern {
+pub mod scan_pattern {
 	pub use self::PatAst::{AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
+
+	use std::io;
 
 	use syntax::ast;
 	use syntax::codemap::{Spanned, respan};
@@ -278,17 +281,29 @@ mod scan_pattern {
 		},
 	}
 
-	impl ::std::fmt::String for PatAst {
-		fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::FormatError> {
+	pub trait FormatSource {
+		fn fmt_source(&self, w: &mut io::Writer) -> Result<(), io::IoError>;
+
+		// Because I'm lazy and they removed `fmt::String` :'(
+		fn to_source(&self) -> String {
+			let mut buffer = vec![];
+			self.fmt_source(&mut buffer).unwrap();
+			String::from_utf8(buffer).unwrap()
+		}
+	}
+
+	impl FormatSource for PatAst {
+		fn fmt_source(&self, f: &mut io::Writer) -> Result<(), io::IoError> {
 			match self {
 				&AstAlternates(ref alts) => {
 					try!(write!(f, "("));
 					let mut alts = alts.iter();
 					if let Some(alt) = alts.next() {
-						try!(write!(f, "{:s}", *alt));
+						try!(alt.fmt_source(f));
 					}
 					for alt in alts {
-						try!(write!(f, "|{:s}", *alt));
+						try!(write!(f, "|"));
+						try!(alt.fmt_source(f));
 					}
 					try!(write!(f, ")"));
 				},
@@ -296,10 +311,11 @@ mod scan_pattern {
 					try!(write!(f, "("));
 					let mut nodes = nodes.iter();
 					if let Some(node) = nodes.next() {
-						try!(write!(f, "{:s}", *node));
+						try!(node.fmt_source(f));
 					}
 					for node in nodes {
-						try!(write!(f, " {:s}", *node));
+						try!(write!(f, " "));
+						try!(node.fmt_source(f));
 					}
 					try!(write!(f, ")"));
 				},
@@ -310,7 +326,9 @@ mod scan_pattern {
 					try!(write!(f, "/\"{}\"", s.escape_default()));
 				},
 				&AstOptional(ref node) => {
-					try!(write!(f, "({:s})?", **node));
+					try!(write!(f, "("));
+					try!(node.fmt_source(f));
+					try!(write!(f, ")?"));
 				},
 				&AstCapture(ref ident, ref m_ty) => {
 					try!(write!(f, "{}", ident.node));
@@ -320,17 +338,22 @@ mod scan_pattern {
 					}
 				},
 				&AstSliceCapture(ref ident, ref node) => {
-					try!(write!(f, "{}={:s}", ident.node, **node));
+					try!(write!(f, "{}=", ident.node));
+					try!(node.fmt_source(f));
 				},
 				&AstLookahead(ref node) => {
-					try!(write!(f, "(?! {:s}", **node));
+					try!(write!(f, "(?! "));
+					try!(node.fmt_source(f));
+					try!(write!(f, ")"));
 				},
 				&AstRepetition { ref node, ref sep, range } => {
-					try!(write!(f, "[{:s}]", **node));
+					try!(write!(f, "["));
+					try!(node.fmt_source(f));
+					try!(write!(f, "["));
 					if let Some(ref sep) = *sep {
-						try!(write!(f, "{:s}", **sep));
+						try!(sep.fmt_source(f));
 					}
-					try!(write!(f, "{:s}", range));
+					try!(range.fmt_source(f));
 				},
 			}
 			Ok(())
@@ -340,8 +363,8 @@ mod scan_pattern {
 	#[deriving(Show)]
 	pub struct RepeatRange(pub uint, pub Option<uint>);
 
-	impl ::std::fmt::String for RepeatRange {
-		fn fmt(&self, f: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::FormatError> {
+	impl FormatSource for RepeatRange {
+		fn fmt_source(&self, f: &mut io::Writer) -> Result<(), io::IoError> {
 			let &RepeatRange(n, m) = self;
 			match (n, m) {
 				(0, None) => try!(write!(f, "*")),
@@ -438,11 +461,11 @@ mod scan_pattern {
 
 	fn try_parse_str_lit(_: &mut ExtCtxt, p: &mut Parser) -> Option<String> {
 		match p.token {
-			token::LitStr(ident) => {
+			token::Literal(token::Str_(ident), _) => {
 				p.bump();
 				Some(::syntax::parse::str_lit(ident.as_str()))
 			},
-			token::LitStrRaw(ident, _) => {
+			token::Literal(token::StrRaw(ident, _), _) => {
 				p.bump();
 				Some(::syntax::parse::raw_str_lit(ident.as_str()))
 			},
@@ -646,7 +669,7 @@ mod scan_pattern {
 				p.bump();
 				(0, Some(parse_uint(cx, p)))
 			},
-			token::LitInteger(_) => {
+			token::Literal(token::Integer(_), _) => {
 				let min = parse_uint(cx, p);
 				let max = if p.eat(&token::Comma) {
 					match try_parse_uint(cx, p) {
@@ -668,7 +691,7 @@ mod scan_pattern {
 	fn try_parse_uint(cx: &mut ExtCtxt, p: &mut Parser) -> Option<uint> {
 		debug!("try_parse_uint(cx, p @ {})", p.token);
 		match p.token {
-			token::LitInteger(_) => Some(parse_uint(cx, p)),
+			token::Literal(token::Integer(_), _) => Some(parse_uint(cx, p)),
 			_ => None
 		}
 	}
@@ -676,8 +699,9 @@ mod scan_pattern {
 	fn parse_uint(_: &mut ExtCtxt, p: &mut Parser) -> uint {
 		debug!("parse_uint(cx, p @ {})", p.token);
 		let int_lit = match p.bump_and_get() {
-			token::LitInteger(s) => {
-				parse::integer_lit(s.as_str(), &p.sess.span_diagnostic, p.span)
+			token::Literal(token::Integer(s), suffix) => {
+				let suffix = suffix.as_ref().map(|s| s.as_str());
+				parse::integer_lit(s.as_str(), suffix, &p.sess.span_diagnostic, p.span)
 			},
 			_ => p.fatal("expected integer literal")
 		};
