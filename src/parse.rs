@@ -1,3 +1,5 @@
+use std::borrow::ToOwned;
+
 use syntax::ast;
 use syntax::codemap::{Spanned, respan};
 use syntax::ext::base::ExtCtxt;
@@ -16,13 +18,13 @@ pub use self::ArmTokenizer::{WordsAndInts, IdentsAndInts, SpaceDelimited, Explic
 pub use self::ArmWhitespace::{Ignore, ExplicitNewline, ExplicitSp, ExplicitAny, ExactSp};
 pub use self::ArmCompareStrs::{CaseInsensitive, AsciiCaseInsensitive, ExactCS};
 
-#[deriving(Show)]
+#[derive(Show)]
 pub enum ScanArm {
 	FallbackArm(Option<Spanned<ast::Ident>>),
 	PatternArm(PatAst, Option<Spanned<ast::Ident>>, ScanArmAttrs),
 }
 
-#[deriving(Show)]
+#[derive(Show)]
 pub struct ScanArmAttrs {
 	pub pat_tok: ArmTokenizer,
 	pub inp_tok: String,
@@ -33,7 +35,7 @@ pub struct ScanArmAttrs {
 	pub trace: bool,
 }
 
-#[deriving(Show)]
+#[derive(Show)]
 pub enum ArmTokenizer {
 	WordsAndInts,
 	IdentsAndInts,
@@ -41,7 +43,7 @@ pub enum ArmTokenizer {
 	ExplicitTok,
 }
 
-#[deriving(Show)]
+#[derive(Show)]
 pub enum ArmWhitespace {
 	Ignore,
 	ExplicitNewline,
@@ -50,7 +52,7 @@ pub enum ArmWhitespace {
 	ExactSp,
 }
 
-#[deriving(Show)]
+#[derive(Show)]
 pub enum ArmCompareStrs {
 	CaseInsensitive,
 	AsciiCaseInsensitive,
@@ -106,7 +108,7 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 			ast::MetaNameValue(ref name, ref value) if name.get() == "runtime_tok" => {
 				let value = lit_str(value).unwrap_or_else(||
 					cx.span_fatal(value.span, "runtime_tok must be a string"));
-				inp_tok = Some(value.into_string());
+				inp_tok = Some(value.to_owned());
 			},
 			ast::MetaNameValue(ref name, ref value) if name.get() == "space" => {
 				let value_span = value.span;
@@ -130,7 +132,7 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 			ast::MetaNameValue(ref name, ref value) if name.get() == "runtime_sp" => {
 				let value = lit_str(value).unwrap_or_else(||
 					cx.span_fatal(value.span, "runtime_sp must be a string"));
-				inp_sp = Some(value.into_string());
+				inp_sp = Some(value.to_owned());
 			},
 			ast::MetaNameValue(ref name, ref value) if name.get() == "compare" => {
 				let value_span = value.span;
@@ -152,7 +154,7 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 			ast::MetaNameValue(ref name, ref value) if name.get() == "runtime_cmp" => {
 				let value = lit_str(value).unwrap_or_else(||
 					cx.span_fatal(value.span, "runtime_cmp must be a string"));
-				inp_cs = Some(value.into_string());
+				inp_cs = Some(value.to_owned());
 			},
 			ast::MetaWord(ref name) if name.get() == "trace" => {
 				trace = Some(true);
@@ -164,11 +166,11 @@ fn parse_scan_arm_attrs(cx: &mut ExtCtxt, p: &mut Parser) -> ScanArmAttrs {
 	}
 
 	let pat_tok = pat_tok.unwrap_or(WordsAndInts);
-	let inp_tok = inp_tok.unwrap_or("rt::tokenizer::WordsAndInts".into_string());
+	let inp_tok = inp_tok.unwrap_or("rt::tokenizer::WordsAndInts".to_owned());
 	let pat_sp = pat_sp.unwrap_or(Ignore);
-	let inp_sp = inp_sp.unwrap_or("rt::whitespace::Ignore".into_string());
+	let inp_sp = inp_sp.unwrap_or("rt::whitespace::Ignore".to_owned());
 	let pat_cs = pat_cs.unwrap_or(CaseInsensitive);
-	let inp_cs = inp_cs.unwrap_or("rt::compare_strs::CaseInsensitive".into_string());
+	let inp_cs = inp_cs.unwrap_or("rt::compare_strs::CaseInsensitive".to_owned());
 	let trace = trace.unwrap_or(false);
 
 	ScanArmAttrs {
@@ -254,6 +256,7 @@ fn parse_arm_expr(_: &mut ExtCtxt, p: &mut Parser) -> P<ast::Expr> {
 pub mod scan_pattern {
 	pub use self::PatAst::{AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
 
+	use std::borrow::ToOwned;
 	use std::io;
 
 	use syntax::ast;
@@ -264,7 +267,7 @@ pub mod scan_pattern {
 	use syntax::ptr::P;
 	use syntax::ext::base::ExtCtxt;
 
-	#[deriving(Show)]
+	#[derive(Show)]
 	pub enum PatAst {
 		AstAlternates(Vec<PatAst>),
 		AstSequence(Vec<PatAst>),
@@ -346,7 +349,7 @@ pub mod scan_pattern {
 					try!(node.fmt_source(f));
 					try!(write!(f, ")"));
 				},
-				&AstRepetition { ref node, ref sep, range } => {
+				&AstRepetition { ref node, ref sep, ref range } => {
 					try!(write!(f, "["));
 					try!(node.fmt_source(f));
 					try!(write!(f, "["));
@@ -360,7 +363,7 @@ pub mod scan_pattern {
 		}
 	}
 
-	#[deriving(Show)]
+	#[derive(Show)]
 	pub struct RepeatRange(pub uint, pub Option<uint>);
 
 	impl FormatSource for RepeatRange {
@@ -553,7 +556,7 @@ pub mod scan_pattern {
 			return None
 		}
 
-		Some(p.parse_ty(/*plus_allowed:*/false))
+		Some(p.parse_ty())
 	}
 
 	// <maybe-group> := <group> "?"?
@@ -615,19 +618,19 @@ pub mod scan_pattern {
 		match p.token {
 			token::Comma => {
 				p.bump();
-				Some(AstText(",".into_string()))
+				Some(AstText(",".to_owned()))
 			},
 			token::Dot => {
 				p.bump();
-				Some(AstText(".".into_string()))
+				Some(AstText(".".to_owned()))
 			},
 			token::Semi => {
 				p.bump();
-				Some(AstText(";".into_string()))
+				Some(AstText(";".to_owned()))
 			},
 			token::Colon => {
 				p.bump();
-				Some(AstText(":".into_string()))
+				Some(AstText(":".to_owned()))
 			},
 			_ => {
 				try_parse_text(cx, p)

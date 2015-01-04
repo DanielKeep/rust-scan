@@ -23,6 +23,6 @@ fn do_scan(s: &str) -> Result<String, scan_util::ScanError> {
 	scan! {
 		s,
 		"\"" x "\"" => x,
-		x0:String r#"\\"# x1:String => x0+x1,
+		x0:String r#"\\"# x1:String => x0 + &*x1,
 	}
 }

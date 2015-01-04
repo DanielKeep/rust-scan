@@ -5,6 +5,8 @@ extern crate regex;
 #[phase(plugin)] extern crate scan;
 extern crate scan_util;
 
+use std::borrow::ToOwned;
+
 const TEST_PAIRS: &'static [(&'static str, Result<&'static str, ()>)] = &[
 	("oHaI", Ok("oHaI")),
 	("OHaI", Ok("ohai")),
@@ -22,7 +24,7 @@ fn issue_18() {
 	for &(inp, exp) in TEST_PAIRS.iter() {
 		let got = do_scan(inp);
 		match exp {
-			Ok(exp_str) => assert_eq!(got, Ok(exp_str.into_string())),
+			Ok(exp_str) => assert_eq!(got, Ok(exp_str.to_owned())),
 			Err(()) => assert!(got.is_err()),
 		}
 	}
@@ -31,10 +33,10 @@ fn issue_18() {
 fn do_scan(s: &str) -> Result<String, scan_util::ScanError> {
 	scan! {
 		s,
-		#[compare="Exact"] "oHaI" => "oHaI".into_string(),
-		#[compare="CaseInsensitive"] "ohai" => "ohai".into_string(),
-		#[compare="Exact"] "sσ" => "exact sσ".into_string(),
-		#[compare="AsciiCaseInsensitive"] "sσ" => "ascii sσ".into_string(),
-		#[compare="CaseInsensitive"] "sσ" => "unico sσ".into_string(),
+		#[compare="Exact"] "oHaI" => "oHaI".to_owned(),
+		#[compare="CaseInsensitive"] "ohai" => "ohai".to_owned(),
+		#[compare="Exact"] "sσ" => "exact sσ".to_owned(),
+		#[compare="AsciiCaseInsensitive"] "sσ" => "ascii sσ".to_owned(),
+		#[compare="CaseInsensitive"] "sσ" => "unico sσ".to_owned(),
 	}
 }

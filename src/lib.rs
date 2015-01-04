@@ -399,7 +399,6 @@ The following is the grammar used to parse patterns.
 <numeric-range> := "{" "," <uint> "}" | "{" <uint> ("," <uint>)? "}"
 ```
 */
-#![feature(if_let)]
 #![feature(phase)]
 #![feature(plugin_registrar)]
 #![feature(quote)]

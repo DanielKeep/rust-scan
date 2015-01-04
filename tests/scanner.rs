@@ -3,9 +3,10 @@
 #[phase(plugin)] extern crate scan;
 extern crate scan_util;
 
+use std::borrow::ToOwned;
 use self::Expr::{Lit, Add, Sub, Mul, Div};
 
-#[deriving(Show)]
+#[derive(Show)]
 struct Pair(pub int, pub int);
 
 scanner! { Pair,
@@ -16,13 +17,13 @@ scanner! { Pair,
 #[test]
 fn test_pair() {
 	let res = scan! { "1 2 wat", p:Pair w:&str => format!("{} {}", p, w) };
-	assert_eq!(res, Ok("Pair(1, 2) wat".into_string()));
+	assert_eq!(res, Ok("Pair(1, 2) wat".to_owned()));
 
 	let res = scan! { "3 .. huh", p:Pair w:&str => format!("{} {}", p, w) };
-	assert_eq!(res, Ok("Pair(3, 0) huh".into_string()));
+	assert_eq!(res, Ok("Pair(3, 0) huh".to_owned()));
 }
 
-#[deriving(PartialEq, Show)]
+#[derive(PartialEq, Show)]
 struct V3 { pub x: f32, pub y: f32, pub z: f32 }
 
 scanner! { V3,
@@ -35,7 +36,7 @@ fn test_v3() {
 	assert_eq!(res, Ok(V3 { x:1.0, y:2.0, z:3.0 }));
 }
 
-#[deriving(Eq, PartialEq, Show)]
+#[derive(Eq, PartialEq, Show)]
 enum Expr {
 	Lit(int),
 	Add(Box<Expr>, Box<Expr>),
@@ -112,13 +113,13 @@ fn test_llk_scanner() {
 	));
 	assert_eq!(parse_expr("2*(1+3)"), Ok(
 		Mul(box Lit(2), box Add(box Lit(1), box Lit(3)))
-	))
+	));
 	assert_eq!(parse_expr("0 0"), Err(
-		scan_util::OtherScanError("expected end of input, got `0`".into_string(), 1)
-	))
+		scan_util::OtherScanError("expected end of input, got `0`".to_owned(), 1)
+	));
 	assert_eq!(parse_expr("1 + (2 | 3)"), Err(
-		scan_util::OtherScanError("expected end of input, got `+`".into_string(), 1)
-	))
+		scan_util::OtherScanError("expected end of input, got `+`".to_owned(), 1)
+	));
 }
 
 fn parse_expr(s: &str) -> Result<Expr, scan_util::ScanError> {

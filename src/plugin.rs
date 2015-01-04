@@ -1,4 +1,4 @@
-use std::collections::TreeMap;
+use std::collections::HashMap;
 
 use syntax::ast;
 use syntax::codemap;
@@ -20,7 +20,7 @@ use scan_util::{Tokenizer, Whitespace, CompareStrs};
 
 use self::ScanKind::{NormalScan, ScannerScan};
 
-#[deriving(Show)]
+#[derive(Copy, Show)]
 enum ScanKind {
 	NormalScan,
 	ScannerScan,
@@ -99,7 +99,7 @@ pub fn expand_scanner(cx: &mut ExtCtxt, sp: codemap::Span, tts: &[ast::TokenTree
 	debug!("expand_scanner(cx, sp, tts)");
 	let mut p = cx.new_parser_from_tts(tts);
 
-	let scan_ty = p.parse_ty(/*plus_allowed:*/false);
+	let scan_ty = p.parse_ty();
 	p.expect(&token::Comma);
 
 	let setup_stmts = vec![];
@@ -159,8 +159,8 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 	let mod_setup_stmt = quote_stmt!(cx,
 		mod rt {
 			extern crate scan_util;
-			pub use std::option::{None, Some};
-			pub use std::result::{Result, Err, Ok};
+			pub use std::option::Option::{None, Some};
+			pub use std::result::Result::{self, Err, Ok};
 			pub use std::vec::Vec;
 			pub use self::scan_util::{
 				Cursor, ScanCursor,
@@ -175,7 +175,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 
 	let mut scan_arm_stmts = vec![];
 
-	debug!("make_scan_expr - generating scan arms...")
+	debug!("make_scan_expr - generating scan arms...");
 	for (i,arm) in arms.into_iter().enumerate() {
 		scan_arm_stmts.push(gen_arm_stmt(cx, arm, i == 0, scan_kind))
 	}
@@ -183,7 +183,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 	match fallback_arm {
 		None => (),
 		Some(arm) => {
-			debug!("make_scan_expr - generating scan fallback arm...")
+			debug!("make_scan_expr - generating scan fallback arm...");
 			let is_first = scan_arm_stmts.len() == 0;
 			scan_arm_stmts.push(gen_arm_stmt(cx, arm, is_first, scan_kind))
 		}
@@ -256,7 +256,7 @@ fn make_scan_expr(cx: &mut ExtCtxt, setup_stmts: Vec<P<ast::Stmt>>, input_expr: 
 							input_expr
 						),
 						quote_stmt!(cx, let mut result: rt::Result<_, rt::ScanError>;),
-					] + scan_arm_stmts,
+					] + &*scan_arm_stmts,
 					Some(quote_expr!(cx, result))
 				)
 			)
@@ -1127,7 +1127,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 			let node_captures = enumerate_captures(&*node);
 			let sep_captures = sep.as_ref()
 				.map(|sep| enumerate_captures(&**sep))
-				.unwrap_or(TreeMap::new());
+				.unwrap_or(HashMap::new());
 
 			let RepeatRange(range_min, range_max) = range;
 			let range_max = range_max.unwrap_or(::std::uint::MAX);
@@ -1246,7 +1246,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 					quote_stmt!(cx, let mut err = rt::None::<rt::ScanError>;),
 					quote_stmt!(cx, let mut repeats = 0u;),
 					quote_stmt!(cx, let mut trailing_sep = false;),
-				] + captures.iter().map(|(&ident, &(sp, _))| {
+				] + &*captures.iter().map(|(&ident, &(sp, _))| {
 					let ty = cx.ty_infer(sp);
 					cx.stmt_let_typed(
 						sp,
@@ -1255,7 +1255,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 						quote_ty!(cx, rt::Vec<$ty>),
 						quote_expr!(cx, rt::Vec::new())
 					)
-				}).collect::<Vec<_>>() + vec![
+				}).collect::<Vec<_>>() + &*vec![
 					cx.stmt_expr(
 						cx.expr(DUMMY_SP,
 							ast::ExprWhile(
@@ -1285,7 +1285,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 																		vec![
 																			quote_stmt!(cx, cur = _cur;),
 																			quote_stmt!(cx, trailing_sep = true;),
-																		] + sep_captures.iter().map(|(&ident, &(sp, _))| {
+																		] + &*sep_captures.iter().map(|(&ident, &(sp, _))| {
 																			cx.stmt_expr(cx.expr_method_call(DUMMY_SP,
 																				cx.expr_ident(DUMMY_SP,
 																					cx.ident_of(format!("vec_{}", ident.as_str()).as_slice())
@@ -1325,7 +1325,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 														quote_stmt!(cx, cur = _cur;),
 														quote_stmt!(cx, repeats += 1;),
 														quote_stmt!(cx, trailing_sep = false;),
-													] + node_captures.iter().map(|(&ident, &(sp, _))| {
+													] + &*node_captures.iter().map(|(&ident, &(sp, _))| {
 														cx.stmt_expr(cx.expr_method_call(DUMMY_SP,
 															cx.expr_ident(DUMMY_SP,
 																cx.ident_of(format!("vec_{}",ident.as_str()).as_slice())
@@ -1406,7 +1406,7 @@ fn gen_ast_scan_expr(cx: &mut ExtCtxt, attrs: &ScanArmAttrs, node: PatAst, and_t
 }
 
 // Annoyingly, Span doesn't implement Ord, hence why we have to split this up.
-type CaptureMap = TreeMap<ast::Ident, (codemap::Span, Option<P<ast::Ty>>)>;
+type CaptureMap = HashMap<ast::Ident, (codemap::Span, Option<P<ast::Ty>>)>;
 
 fn enumerate_captures(node: &PatAst) -> CaptureMap {
 	use parse::{AstAlternates, AstSequence, AstText, AstRegex, AstOptional, AstCapture, AstSliceCapture, AstLookahead, AstRepetition};
@@ -1420,16 +1420,16 @@ fn enumerate_captures(node: &PatAst) -> CaptureMap {
 
 	match node {
 		&AstAlternates(ref nodes) | &AstSequence(ref nodes) => {
-			nodes.iter().map(enumerate_captures).fold(TreeMap::new(), |a,b| merge(a,b))
+			nodes.iter().map(enumerate_captures).fold(HashMap::new(), |a,b| merge(a,b))
 		},
 		&AstText(..) | &AstRegex(..) => {
-			TreeMap::new()
+			HashMap::new()
 		},
 		&AstOptional(ref node) => {
 			enumerate_captures(&**node)
 		},
 		&AstCapture(ident, ref ty) => {
-			let mut set = TreeMap::new();
+			let mut set = HashMap::new();
 			// Ignore "_" as a capture.
 			if ident.node.as_str() != "_" {
 				set.insert(ident.node, (ident.span, ty.clone()));
