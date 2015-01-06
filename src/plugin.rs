@@ -1514,11 +1514,14 @@ impl FakeToTokens for String {
 }
 
 trait MaybePrefixStatement {
-	fn maybe_prefix_stmt(self, do_prefix: bool, sp: codemap::Span, stmt_f: || -> P<ast::Stmt>) -> P<ast::Expr>;
+	fn maybe_prefix_stmt<StmtF>(self, do_prefix: bool, sp: codemap::Span, stmt_f: StmtF) -> P<ast::Expr>
+        where StmtF: FnOnce() -> P<ast::Stmt>;
 }
 
 impl MaybePrefixStatement for P<ast::Expr> {
-	fn maybe_prefix_stmt(self, do_prefix: bool, sp: codemap::Span, stmt_f: || -> P<ast::Stmt>) -> P<ast::Expr> {
+	fn maybe_prefix_stmt<StmtF>(self, do_prefix: bool, sp: codemap::Span, stmt_f: StmtF) -> P<ast::Expr> 
+        where StmtF: FnOnce() -> P<ast::Stmt>
+    {
 		if do_prefix {
 			P(ast::Expr {
 				id: ast::DUMMY_NODE_ID,
